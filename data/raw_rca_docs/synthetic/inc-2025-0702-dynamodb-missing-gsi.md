@@ -10,6 +10,13 @@ account_id: "611349207823"
 status: "resolved"
 tags: ["dynamodb", "gsi", "scan", "cost-spike", "latency"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: null
+duration_minutes: 12960
+cost_usd: 20700
 ---
 
 ## Summary

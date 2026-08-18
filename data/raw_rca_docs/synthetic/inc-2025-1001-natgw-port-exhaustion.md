@@ -10,6 +10,13 @@ account_id: "837120945566"
 status: "resolved"
 tags: ["networking", "nat-gateway", "connection-exhaustion", "capacity", "payments"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 19
+duration_minutes: 115
+cost_usd: 12500
 ---
 
 ## Summary

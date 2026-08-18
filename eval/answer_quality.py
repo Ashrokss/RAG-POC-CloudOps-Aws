@@ -15,6 +15,13 @@ instead of letting it pass through as the non-judgment it is. Clamping
 happens once, in the quality_score normalization, instead of at the field
 level.
 
+adversarial_judge exists because neither judge above can fail an answer that
+is fluent, on-vocabulary and wrong. It scores what the question actually
+asked for - did the system refuse a question with no answer, did it name the
+incidents that must be named, did it name one it must not, and does every
+date and figure it stated beside an incident id appear in that incident's own
+text. Those are pass/fail facts, not similarity scores.
+
 RAGAS would give retrieval-grounded metrics (faithfulness, answer-relevancy)
 without hand-rolled scoring prompts, but it's an optional stretch
 enhancement, not a hard dependency of this harness - if it's ever wired in,
@@ -24,10 +31,13 @@ keep working.
 
 from __future__ import annotations
 
+from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
+from eval.grounding import INCIDENT_RE, check_grounding, count_by_kind
+from rag.chain.rag_chain import INSUFFICIENT_EVIDENCE_PHRASE
 from rag.llm.factory import get_chat_model
-from rag.models import Citation
+from rag.models import Citation, GoldenQuestion
 
 _JUDGE_PROMPT_TEMPLATE = """You are grading a RAG system's answer against a reference summary.
 
@@ -91,3 +101,57 @@ def llm_judge(question: str, generated_answer: str, expected_answer_summary: str
         "completeness": scores.completeness,
         "quality_score": quality_score,
     }
+
+def _mentioned_ids(answer: str, citations: list[Citation]) -> set[str]:
+    """An incident counts as named if it appears in the answer text or in a
+    resolved citation - a correct answer that cites INC-2025-0301 and describes
+    it in prose without repeating the id has still named it."""
+    cited = {citation.incident_id for citation in citations}
+    return cited | {incident_id for incident_id in INCIDENT_RE.findall(answer)}
+
+
+def adversarial_judge(
+    golden_question: GoldenQuestion,
+    generated_answer: str,
+    citations: list[Citation],
+    docs: list[Document],
+) -> dict:
+    mentioned = _mentioned_ids(generated_answer, citations)
+    refused = INSUFFICIENT_EVIDENCE_PHRASE in generated_answer.lower()
+
+    violations = check_grounding(generated_answer, docs)
+    violation_counts = count_by_kind(violations)
+    # Quoted claims only. A number an aggregate answer computed (a total) is
+    # supposed to be absent from every source chunk, so counting it as
+    # ungrounded would fail exactly the questions this set exists to ask.
+    quoted_violations = violation_counts["date"] + violation_counts["unretrieved_incident"]
+
+    result: dict = {
+        "grounding_violations": len(violations),
+        "grounding_date_violations": violation_counts["date"],
+        "grounding_number_violations": violation_counts["number"],
+        "grounding_unretrieved_incidents": violation_counts["unretrieved_incident"],
+        "grounding_details": violations[:10],
+    }
+
+    components: list[float] = [1.0 if quoted_violations == 0 else 0.0]
+
+    if golden_question.expects_refusal:
+        result["refusal_correct"] = 1.0 if refused else 0.0
+        components.append(result["refusal_correct"])
+
+    if golden_question.must_mention_ids:
+        hits = sum(1 for incident_id in golden_question.must_mention_ids if incident_id in mentioned)
+        result["required_id_recall"] = hits / len(golden_question.must_mention_ids)
+        components.append(result["required_id_recall"])
+
+    if golden_question.forbidden_ids:
+        leaked = [incident_id for incident_id in golden_question.forbidden_ids if incident_id in mentioned]
+        # A refusal that also volunteers a nearby incident's root cause is the
+        # failure this catches: refusal_correct alone would score it 1.0.
+        result["forbidden_id_leak"] = 1.0 if leaked else 0.0
+        result["forbidden_ids_leaked"] = leaked
+        components.append(0.0 if leaked else 1.0)
+
+    result["quality_score"] = sum(components) / len(components)
+    return result

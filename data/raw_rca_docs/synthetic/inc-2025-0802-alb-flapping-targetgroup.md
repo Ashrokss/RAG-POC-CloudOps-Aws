@@ -10,6 +10,13 @@ account_id: "482910735620"
 status: "resolved"
 tags: ["networking", "load-balancer", "health-check", "5xx", "cloudfront"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 5
+duration_minutes: 39
+cost_usd: null
 ---
 
 ## Summary

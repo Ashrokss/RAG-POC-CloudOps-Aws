@@ -59,3 +59,44 @@ question set so the tradeoffs are visible instead of assumed.
 Every module above `rag/vectorstore/chroma_store.py` talks to LangChain's `VectorStore`
 interface, never to `chromadb` directly. See `docs/open-questions.md` for why - it's the
 DynamoDB migration path in one paragraph.
+
+
+## Two routes, one answer path
+
+`rag/routing/router.py` classifies each question before retrieval runs. Questions asking
+to count, rank, enumerate or total ("how many", "list every", "longest", "total") take the
+**aggregate** route; everything else takes the ordinary **retrieval** route. The split
+exists because top-k retrieval is structurally incapable of the first kind: the model only
+ever sees k chunks, so "which incident had the longest detection gap" cannot be answered
+correctly by a better reranker, only by looking at every incident.
+
+The aggregate route builds the incident index (`rag/routing/incident_table.py`) - one row
+per document with date, severity, services, status, and the three hand-extracted fields
+`detection_gap_minutes`, `duration_minutes`, `cost_usd` - filters it by any service the
+question named, and hands the model those rows *plus* chunk text for each listed incident,
+so an enumerated answer can still cite real excerpts rather than assert from metadata.
+`RAGAnswer.route` records which path ran; the Streamlit console and the eval records both
+surface it.
+
+Classification is a regex, not an LLM call: the trigger vocabulary is small and closed, and
+a model round-trip to decide the route would add a second failure mode to a decision that
+does not need one. Over-triggering is the cheap direction - the aggregate route still runs
+normal retrieval and still cites chunk text, it just also hands over the index.
+
+## The concept layer (`okf/`)
+
+`okf/services/*.md` is a curated, human-reviewed file per service: canonical id, the
+aliases actually seen in the corpus, `depends_on`, `owned_by`, and its known failure modes
+linked to the incidents that exhibited them. `rag/ingestion/loader.py` normalises every
+`services` value in document frontmatter against it at ingest.
+
+Before this, `services` was free text written by several people - `lambda` and `Lambda` (5
+docs each), `ec2`/`EC2`, `api-gateway`/`API Gateway`, `ELB`/`ALB`/`alb` - so any metadata
+filter matched roughly half the corpus it should have, which is why the aggregate route
+above had to wait for it. An unrecognised service name is a warning naming the `okf/` file
+that would fix it, never an exception: the curated layer is expected to lag the corpus, and
+an ingest that refuses to run until someone writes a concept file is an ingest nobody runs.
+
+The failure-mode files these link to (`okf/failure-modes/*.md`), the playbook layer and the
+dependency graph are deliberately not built yet - the service files are the ones the
+routing layer actually consumes today.

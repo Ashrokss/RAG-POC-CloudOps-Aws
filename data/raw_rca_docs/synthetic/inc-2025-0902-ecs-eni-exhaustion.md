@@ -10,6 +10,13 @@ account_id: "558312940071"
 status: "resolved"
 tags: ["networking", "capacity", "vpc", "deployment", "eni"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 6
+duration_minutes: 54
+cost_usd: 41000
 ---
 
 ## Summary

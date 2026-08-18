@@ -8,11 +8,18 @@ citation text out of a model reply) just to get there.
 retrieve_only rebuilds the corpus's chunk list from data/raw_rca_docs via
 load_rca_documents/chunk_all - the same pipeline cli/ingest.py runs - rather
 than reading chunks back out of Chroma's collection: chroma_store.py is
-deliberately the only Chroma-aware module in this codebase, and chunk_id
-(the one field a fresh chunk wouldn't share with its persisted counterpart,
-since chunk_document() mints it from uuid4() on every call) isn't used by
-keyword retrieval or by citation resolution, so re-chunking here costs
-nothing correctness-wise for a corpus this small.
+deliberately the only Chroma-aware module in this codebase, and chunk_id is
+now derived deterministically from (doc_id, section, ordinal), so an
+in-memory chunk and its persisted counterpart in Chroma are the same chunk
+under the same id.
+
+That rebuild - every markdown file read, frontmatter-parsed and re-split, plus
+a BM25 index built over the result - used to run on every single query, for
+every strategy, including semantic, which never touches the chunk list. Both
+it and the built retriever are cached now (the retriever per (strategy, k),
+since that pair is all it depends on). Anything that changes what is on disk
+or in the collection must call reset_corpus_cache(); the test suite does this
+between tests, and a re-ingest is a separate process that starts cold.
 
 generate() calls get_chat_model() itself, and answer_question() calls it
 again afterwards just to read off model_id - two lightweight client objects
@@ -25,26 +32,33 @@ from __future__ import annotations
 
 import re
 import time
-from pathlib import Path
+from functools import lru_cache
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.retrievers import BaseRetriever
 
 from config.settings import get_settings
 from rag.chain.prompt import RAG_PROMPT, SOURCE_HEADER_TEMPLATE
 from rag.embeddings.factory import get_embeddings
 from rag.ingestion.chunker import chunk_all
-from rag.ingestion.loader import load_rca_documents
+from rag.ingestion.loader import CORPUS_DIRS, load_rca_documents
 from rag.llm.factory import get_chat_model
 from rag.models import Citation, RAGAnswer
 from rag.retrieval.factory import get_retriever
+from rag.routing.incident_table import filter_rows, incident_rows, render_rows, reset_incident_table
+from rag.routing.router import classify, question_services
 from rag.vectorstore.chroma_store import get_vectorstore
-
-_CORPUS_DIRS = [Path("data/raw_rca_docs/real"), Path("data/raw_rca_docs/synthetic")]
 
 _CITATION_RE = re.compile(r"\[([^\]·]+)·([^\]]+)\]")
 _SNIPPET_LENGTH = 150
-_INSUFFICIENT_EVIDENCE_PHRASE = "insufficient evidence in the retrieved context"
+# Two chunks per incident, preferred sections first: enough for the model to
+# cite real text for each row it enumerates, without a 25-incident index
+# dragging the entire corpus into the prompt behind it.
+_AGGREGATE_CHUNKS_PER_INCIDENT = 2
+_AGGREGATE_CHUNK_BUDGET = 30
+_PREFERRED_SECTIONS = ("Summary", "Impact", "Root Cause", "Detection")
+INSUFFICIENT_EVIDENCE_PHRASE = "insufficient evidence in the retrieved context"
 
 
 def format_docs(docs: list[Document]) -> str:
@@ -56,17 +70,40 @@ def format_docs(docs: list[Document]) -> str:
     )
 
 
+@lru_cache(maxsize=1)
 def _corpus_chunks() -> list[Document]:
+    # Callers must treat the returned list as read-only - it is the one shared
+    # copy every retriever in this process is built from.
     settings = get_settings()
-    docs = load_rca_documents(_CORPUS_DIRS)
+    docs = load_rca_documents(list(CORPUS_DIRS))
     return chunk_all(docs, settings.chunk_size, settings.chunk_overlap)
 
 
+@lru_cache(maxsize=16)
+def _cached_retriever(strategy: str, k: int) -> BaseRetriever:
+    # (strategy, k) is the retriever's whole identity: the vector store handle
+    # and the chunk list behind it are fixed for the process's lifetime, and
+    # rebuilding BM25 from 233 chunks per call was pure waste - an 86-question
+    # eval across 4 strategies paid for it 344 times.
+    return get_retriever(strategy, get_vectorstore(get_embeddings()), _corpus_chunks(), k)
+
+
+def reset_corpus_cache() -> None:
+    """Drop both caches. Needed after the corpus on disk or the collection
+    changes underneath a live process (and between tests).
+
+    getattr rather than a direct .cache_clear() call: tests monkeypatch
+    _corpus_chunks with a plain function, which has no cache to clear, and
+    teardown must not care which of the two it is looking at."""
+    for cached in (_corpus_chunks, _cached_retriever):
+        clear = getattr(cached, "cache_clear", None)
+        if clear is not None:
+            clear()
+    reset_incident_table()
+
+
 def retrieve_only(question: str, strategy: str, k: int) -> list[Document]:
-    vectorstore = get_vectorstore(get_embeddings())
-    chunks = _corpus_chunks()
-    retriever = get_retriever(strategy, vectorstore, chunks, k)
-    docs = retriever.invoke(question)
+    docs = _cached_retriever(strategy, k).invoke(question)
 
     # EnsembleRetriever's RRF fusion (hybrid/hybrid_rerank) can surface the
     # same chunk from both sub-retrievers as two separate list entries - a
@@ -80,7 +117,61 @@ def retrieve_only(question: str, strategy: str, k: int) -> list[Document]:
             continue
         seen_chunk_ids.add(chunk_id)
         deduped.append(doc)
-    return deduped
+
+    # k is a contract across all four strategies, not a hint. EnsembleRetriever
+    # (hybrid) fuses two k-wide rankings by RRF and truncates nothing, so it
+    # returned up to 2k documents where semantic/keyword/hybrid_rerank returned
+    # exactly k - a live bake-off saw 9-10 chunks at k=5 and 18 at k=10. That
+    # made every cross-strategy comparison apples-to-oranges twice over: hybrid
+    # got double the context to answer from, and eval/retrieval_metrics.py's
+    # precision_at_k divides by len(retrieved), so hybrid was structurally
+    # penalised on precision no matter how good its ranking was.
+    return deduped[:k]
+
+
+def _supporting_chunks(rows: tuple[dict, ...], already_have: list[Document]) -> list[Document]:
+    """Chunk text for the incidents the index lists, so an enumerated answer can
+    cite each row instead of asserting it from metadata alone."""
+    seen = {doc.metadata["chunk_id"] for doc in already_have}
+    by_incident: dict[str, list[Document]] = {}
+    for chunk in _corpus_chunks():
+        by_incident.setdefault(chunk.metadata["incident_id"], []).append(chunk)
+
+    supporting: list[Document] = []
+    for row in rows:
+        candidates = by_incident.get(row["incident_id"], [])
+        ranked = sorted(
+            candidates,
+            key=lambda doc: _PREFERRED_SECTIONS.index(doc.metadata["section"])
+            if doc.metadata["section"] in _PREFERRED_SECTIONS
+            else len(_PREFERRED_SECTIONS),
+        )
+        for chunk in ranked[:_AGGREGATE_CHUNKS_PER_INCIDENT]:
+            if chunk.metadata["chunk_id"] in seen or len(supporting) >= _AGGREGATE_CHUNK_BUDGET:
+                continue
+            seen.add(chunk.metadata["chunk_id"])
+            supporting.append(chunk)
+    return supporting
+
+
+def aggregate_context(question: str, docs: list[Document]) -> tuple[str, list[Document]]:
+    """The incident index for this question, plus the retrieved chunks widened
+    to cover every incident the index lists."""
+    rows = filter_rows(incident_rows(), question_services(question))
+    index_block = "### INCIDENT INDEX ###\n" + render_rows(rows)
+    return index_block, docs + _supporting_chunks(rows, docs)
+
+
+def retrieve_for_question(question: str, strategy: str, k: int) -> tuple[list[Document], str, str]:
+    """(docs, index_block, route) - the whole pre-generation half of answering.
+    The eval harness calls this rather than re-deriving the route itself, so a
+    scored run and a user-facing answer cannot diverge on which path ran."""
+    route = classify(question)
+    docs = retrieve_only(question, strategy, k)
+    index_block = ""
+    if route == "aggregate":
+        index_block, docs = aggregate_context(question, docs)
+    return docs, index_block, route
 
 
 def _resolve_citations(answer: str, docs: list[Document]) -> list[Citation]:
@@ -105,9 +196,9 @@ def _resolve_citations(answer: str, docs: list[Document]) -> list[Citation]:
     return citations
 
 
-def generate(question: str, docs: list[Document]) -> tuple[str, list[Citation]]:
+def generate(question: str, docs: list[Document], index_block: str = "") -> tuple[str, list[Citation]]:
     chain = RAG_PROMPT | get_chat_model() | StrOutputParser()
-    context = format_docs(docs)
+    context = f"{index_block}\n\n{format_docs(docs)}" if index_block else format_docs(docs)
     answer = chain.invoke({"context": context, "question": question})
     citations = _resolve_citations(answer, docs)
 
@@ -116,7 +207,7 @@ def generate(question: str, docs: list[Document]) -> tuple[str, list[Citation]]:
     # reviewer can't check a claim with no marker pointing at its source.
     # One retry with an explicit correction, rather than shipping that
     # answer: a refusal legitimately has zero citations, so it's excluded.
-    if not citations and _INSUFFICIENT_EVIDENCE_PHRASE not in answer.lower():
+    if not citations and INSUFFICIENT_EVIDENCE_PHRASE not in answer.lower():
         retry_question = (
             f"{question}\n\n"
             "Your previous answer did not cite any source chunk. Revise it: "
@@ -134,8 +225,8 @@ def answer_question(question: str, strategy: str = "hybrid", k: int | None = Non
     resolved_k = k if k is not None else settings.retrieval_top_k
 
     start = time.perf_counter()
-    docs = retrieve_only(question, strategy, resolved_k)
-    answer, citations = generate(question, docs)
+    docs, index_block, route = retrieve_for_question(question, strategy, resolved_k)
+    answer, citations = generate(question, docs, index_block)
     latency_ms = (time.perf_counter() - start) * 1000
 
     chat_model = get_chat_model()
@@ -152,4 +243,5 @@ def answer_question(question: str, strategy: str = "hybrid", k: int | None = Non
         latency_ms=latency_ms,
         model_id=model_id,
         mode="mock" if settings.mock_mode else "live",
+        route=route,
     )

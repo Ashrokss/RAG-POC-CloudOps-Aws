@@ -6,13 +6,14 @@ real docs - are cases the checked-in corpus deliberately never contains.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from rag.ingestion.loader import load_rca_documents, parse_frontmatter
+from rag.ingestion.loader import canonical_service, load_rca_documents, parse_frontmatter
 from rag.models import RCADocumentMeta
 
 _VALID_FRONTMATTER = """---
@@ -53,7 +54,8 @@ def test_load_rca_documents_happy_path(tmp_path: Path) -> None:
     assert isinstance(meta, RCADocumentMeta)
     assert meta.incident_id == "INC-TEST-0001"
     assert meta.severity == "high"
-    assert meta.services == ["S3", "EC2"]
+    # Normalised against okf/services/ - the frontmatter says ["S3", "EC2"].
+    assert meta.services == ["s3", "ec2"]
     assert meta.date == datetime(2025, 1, 1, tzinfo=timezone.utc)
     assert "## Summary" in body
 
@@ -83,3 +85,35 @@ def test_load_rca_documents_blank_doc_id_generates_uuid(tmp_path: Path) -> None:
     docs = load_rca_documents([tmp_path])
 
     assert uuid.UUID(docs[0][0].doc_id).version == 4
+
+
+def test_load_rca_documents_normalises_service_aliases(tmp_path: Path) -> None:
+    text = _VALID_FRONTMATTER.replace(
+        'services: ["S3", "EC2"]', 'services: ["Lambda", "API Gateway"]'
+    )
+    (tmp_path / "inc-0001.md").write_text(text, encoding="utf-8")
+
+    docs = load_rca_documents([tmp_path])
+
+    assert docs[0][0].services == ["lambda", "api-gateway"]
+
+
+def test_unknown_service_warns_and_passes_through(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The curated okf/ layer is expected to lag the corpus; an ingest that
+    # raises on the first unclaimed service name is an ingest nobody can run.
+    text = _VALID_FRONTMATTER.replace('services: ["S3", "EC2"]', 'services: ["kafka"]')
+    (tmp_path / "inc-0001.md").write_text(text, encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="rag.ingestion.loader"):
+        docs = load_rca_documents([tmp_path])
+
+    assert docs[0][0].services == ["kafka"]
+    assert any("okf/services/kafka.md" in record.getMessage() for record in caplog.records)
+
+
+def test_canonical_service_is_case_and_spelling_insensitive() -> None:
+    assert canonical_service("ELB") == "alb"
+    assert canonical_service("alb") == "alb"
+    assert canonical_service("ElastiCache for Redis") == "elasticache"

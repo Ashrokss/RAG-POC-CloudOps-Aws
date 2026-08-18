@@ -84,3 +84,27 @@ def test_chunk_document_splits_oversized_section_further() -> None:
     assert all(chunk.metadata["section"] == "Timeline" for chunk in chunks)
     assert all(len(chunk.page_content) <= chunk_size for chunk in chunks)
     assert len({chunk.metadata["chunk_id"] for chunk in chunks}) == len(chunks)
+
+
+def test_chunk_document_chunk_ids_are_deterministic() -> None:
+    # Same document chunked twice must produce the same ids, or the Chroma
+    # upsert path degrades into "insert everything again under new ids" and a
+    # second ingest silently duplicates the corpus.
+    meta = _meta()
+    body = "## Summary\n\nShort summary text.\n\n## Root Cause\n\nShort root cause text.\n"
+
+    first = chunk_document(meta, body, chunk_size=800, chunk_overlap=50)
+    second = chunk_document(meta, body, chunk_size=800, chunk_overlap=50)
+
+    assert [c.metadata["chunk_id"] for c in first] == [c.metadata["chunk_id"] for c in second]
+
+
+def test_chunk_document_chunk_ids_differ_across_documents() -> None:
+    body = "## Summary\n\nShort summary text.\n"
+
+    first = chunk_document(_meta(), body, chunk_size=800, chunk_overlap=50)
+    second = chunk_document(_meta(), body, chunk_size=800, chunk_overlap=50)
+
+    # Two RCADocumentMeta instances get distinct doc_ids, so their chunks must
+    # not collide even though section, ordinal and text are identical.
+    assert first[0].metadata["chunk_id"] != second[0].metadata["chunk_id"]

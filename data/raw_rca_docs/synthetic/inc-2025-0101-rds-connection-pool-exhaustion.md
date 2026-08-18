@@ -10,6 +10,13 @@ account_id: "418773529104"
 status: "resolved"
 tags: ["rds", "lambda", "connection-pool", "concurrency", "postgres"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 3
+duration_minutes: 47
+cost_usd: 61000
 ---
 
 ## Summary

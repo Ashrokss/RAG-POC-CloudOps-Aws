@@ -10,6 +10,13 @@ account_id: "418773529104"
 status: "resolved"
 tags: ["lambda", "concurrency", "throttling", "sqs"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 4
+duration_minutes: 95
+cost_usd: null
 ---
 
 ## Summary

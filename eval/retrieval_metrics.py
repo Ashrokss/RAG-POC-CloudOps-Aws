@@ -33,21 +33,32 @@ def mrr(retrieved_doc_ids: list[str], relevant_doc_ids: list[str]) -> float:
 
 
 def aggregate_metrics(records: list[dict]) -> dict:
-    groups: dict[tuple[str, str], list[dict]] = {}
+    """Grouped by (question_set, strategy, question_type). The set is part of
+    the key, never averaged over: the golden set and the adversarial set are
+    scored by different judges, so one number spanning both would mean
+    nothing."""
+    groups: dict[tuple[str, str, str], list[dict]] = {}
     for record in records:
-        key = (record["strategy"], record["question_type"])
+        key = (record.get("question_set", "golden"), record["strategy"], record["question_type"])
         groups.setdefault(key, []).append(record)
 
-    aggregated: dict[tuple[str, str], dict[str, float]] = {}
+    aggregated: dict[tuple[str, str, str], dict[str, float]] = {}
     for key, group_records in groups.items():
-        numeric_fields = [
-            field
-            for field, value in group_records[0].items()
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-        ]
-        averages = {
-            field: sum(r[field] for r in group_records) / len(group_records) for field in numeric_fields
-        }
+        # Union, not group_records[0]: within one set, an adversarial refusal
+        # question carries refusal_correct while its neighbours do not, and
+        # keying off the first record would drop whichever fields it lacks.
+        numeric_fields = sorted(
+            {
+                field
+                for record in group_records
+                for field, value in record.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            }
+        )
+        averages = {}
+        for field in numeric_fields:
+            present = [r[field] for r in group_records if field in r]
+            averages[field] = sum(present) / len(present)
         averages["n"] = len(group_records)
         aggregated[key] = averages
 

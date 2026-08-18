@@ -1,0 +1,133 @@
+# Adversarial question set. Same schema as golden_qa.yaml plus three optional
+# fields - expects_refusal, must_mention_ids, forbidden_ids - and it is scored
+# on those instead of on token overlap against a reference summary.
+#
+# These 13 questions are the ones a live bake-off ran against the deployed
+# console (4 strategies, 52 answers). They exist because golden_qa.yaml's 86
+# questions contain zero unanswerable questions, zero aggregates, and zero
+# refusal traps: every one of them has an answer sitting in a single retrievable
+# chunk, so a system that never refuses and never counts scores well on all 86.
+#
+# The two failures that motivated the scoring change both passed the Jaccard
+# judge with a good score:
+#   - the same $20,700 counted twice and totalled to $41,400
+#   - INC-2025-1002 dated 30 May and called a concurrency config change
+#     (it is 1-2 Oct, an IAM trust-policy regression)
+# Neither is a vocabulary problem, so no amount of token overlap detects them.
+# must_mention_ids / forbidden_ids catch the second; eval/grounding.py catches
+# the class the first belongs to.
+#
+# Ids in must_mention_ids / forbidden_ids are incident ids. The runner resolves
+# them to doc ids against the incident table, so retrieval metrics still work
+# without anyone hand-copying a UUID.
+
+- qid: "adv-01-iam-cross-incident"
+  question: "Across all 2025 incidents in the corpus, which ones share an IAM or permissions misconfiguration as a root cause or contributing factor, and how did the remediation differ between them?"
+  question_type: cross_document
+  must_mention_ids: ["INC-2025-1002", "INC-2025-0301"]
+  expected_answer_summary: "INC-2025-1002 (IAM trust-policy regression from a module bump, remediated by pinning the module version and restoring the scoped trust statement) and INC-2025-0301 (over-restrictive S3 bucket policy shipped by Terraform, remediated by rolling the policy back and adding a policy-diff check to the pipeline)."
+  notes: "Cross-incident synthesis. Both incidents must be named; naming only one is a partial answer."
+
+- qid: "adv-02-longest-detection-gap"
+  question: "Which incident had the longest gap between customer impact starting and the on-call team detecting it, how long was that gap, and what monitoring change was added afterwards to close it?"
+  question_type: aggregate
+  must_mention_ids: ["INC-2025-0302"]
+  expected_answer_summary: "INC-2025-0302, cross-region S3 replication lag: 6 hours 27 minutes between the first KMS throttling event and the ReplicationLatency alarm firing, because the alarm only evaluated a trailing window and could not see a slowly-climbing, never-recovering lag."
+  notes: "All four strategies failed this live. Requires ranking a column across the whole corpus - top-k retrieval structurally cannot answer it."
+
+- qid: "adv-03-unanswerable-incident"
+  question: "What was the root cause of INC-2025-0999, and which team owned its follow-up actions?"
+  question_type: unanswerable
+  expects_refusal: true
+  forbidden_ids: ["INC-2025-0101", "INC-2025-0902", "INC-2025-1002"]
+  expected_answer_summary: "INC-2025-0999 does not exist in this corpus; the correct answer is a refusal, not a nearby incident's root cause."
+  notes: "Refusal trap. A plausible-looking id that no document defines."
+
+- qid: "adv-04-eni-subnet-detail"
+  question: "For subnet subnet-0a1b2c3d4e5f67890 in payments-prod-vpc, what exact CIDR change or ENI limit fix was applied, what was the p99 cold start before and after, and which alarm now guards it?"
+  question_type: factual
+  must_mention_ids: ["INC-2025-0201"]
+  expected_answer_summary: "INC-2025-0201: a second, larger /24 subnet (subnet-0f9e8d7c6b5a43210) was added to payments-webhook-handler's VPC configuration after the /26 ran out of free IPv4 addresses; p99 latency returned from 18.4s to the ~380ms baseline, and an alarm on EniLimitExceededException was added."
+  notes: "Multi-part factual. Any part the corpus does not state must be declined, not invented."
+
+- qid: "adv-05-repeat-failure-mode"
+  question: "Which failure mode repeats across the most incidents: Terraform or IaC changes shipping regressions, missing timeouts and retries, or capacity and quota exhaustion? Name the incident IDs under each and say which one to fix first."
+  question_type: aggregate
+  must_mention_ids: ["INC-2025-0201", "INC-2025-0902", "INC-2025-1001"]
+  expected_answer_summary: "Capacity and quota exhaustion repeats most (ENI/IP exhaustion in INC-2025-0201 and INC-2025-0902, NAT port exhaustion in INC-2025-1001, connection-pool exhaustion in INC-2025-0101, concurrency ceiling in INC-2025-0202), ahead of IaC regressions (INC-2025-0301, INC-2025-1002, INC-2026-0142)."
+  notes: "Requires grouping the whole corpus, not retrieving from it."
+
+- qid: "adv-06-historical-analogue"
+  question: "The 2017 S3 us-east-1 outage and the 2021 Meta BGP outage both failed at the safety-check layer. Explain each failure, then name the 2025 or 2026 incident in this corpus with the closest equivalent missing guardrail and why."
+  question_type: cross_document
+  must_mention_ids: ["INC-2017-0228-S3-USEAST1", "INC-2021-1004-META-BGP", "INC-2026-0142"]
+  expected_answer_summary: "Both 2017 S3 and 2021 Meta BGP ran a destructive command that passed an audit/safety check too weak to catch its blast radius; INC-2026-0142 is the closest modern analogue - a Terraform apply destroyed and recreated a subnet with no pre-apply drift or destroy safeguard."
+  notes: "Real-incident to synthetic-incident analogy across a decade of the corpus."
+
+- qid: "adv-07-lambda-enumeration"
+  question: "List every incident involving AWS Lambda in chronological order with its date, and for each say in one line whether the trigger was a deploy, a config change, or an external event."
+  question_type: aggregate
+  must_mention_ids:
+    - "INC-2017-0228-S3-USEAST1"
+    - "INC-2025-0101"
+    - "INC-2025-0201"
+    - "INC-2025-0202"
+    - "INC-2025-0302"
+    - "INC-2025-0601"
+    - "INC-2025-0602"
+    - "INC-2025-0701"
+    - "INC-2025-0702"
+    - "INC-2025-1002"
+  expected_answer_summary: "Ten incidents list lambda in their services metadata, in date order from the 2017 S3 us-east-1 outage through INC-2025-1002, each with the date the document records."
+  notes: "Enumeration plus date grounding - this is the question grounding_violations must come back clean on."
+
+- qid: "adv-08-symptom-to-runbook"
+  question: "We are seeing 4xx errors at the CDN edge and users cannot download exports. Which past incident matches, what exactly do I check first, and what is the rollback command?"
+  question_type: semantic
+  must_mention_ids: ["INC-2025-0301"]
+  expected_answer_summary: "INC-2025-0301: an over-restrictive S3 bucket policy shipped by Terraform made CloudFront return 403 for every object in reports-export-prod; check the bucket policy against the distribution's origin access identity first, and roll the policy back to the previous revision."
+  notes: "Symptom-first phrasing with no incident id in the question."
+
+- qid: "adv-09-prioritisation"
+  question: "I can fund only three action items across this whole incident corpus. Which three prevent the most repeat incidents, which incidents does each cover, and what does each one cost us to skip?"
+  question_type: aggregate
+  must_mention_ids: ["INC-2025-0201", "INC-2025-0301", "INC-2025-0902"]
+  expected_answer_summary: "Answers must span at least three distinct incidents and tie each proposed action item to the incidents it would have prevented, using recorded cost where the corpus states one."
+  notes: "Judgement question. Scored on breadth of grounded coverage, not on matching one reference wording."
+
+- qid: "adv-10-cost-total"
+  question: "Give me every dollar figure of financial or cost impact recorded anywhere in this corpus, each with its incident ID, and total them."
+  question_type: aggregate
+  must_mention_ids:
+    - "INC-2025-0101"
+    - "INC-2025-0302"
+    - "INC-2025-0402"
+    - "INC-2025-0601"
+    - "INC-2025-0702"
+    - "INC-2025-0801"
+    - "INC-2025-0902"
+    - "INC-2025-1001"
+  expected_answer_summary: "Eight incidents record a cost figure: 61000 (INC-2025-0101), 13200 (INC-2025-0302), 380 (INC-2025-0402), 12400 (INC-2025-0601), 20700 (INC-2025-0702), 85000 (INC-2025-0801), 41000 (INC-2025-0902), 12500 (INC-2025-1001) - 246,180 USD in total. The 150-160M third-party estimate for the 2017 S3 outage is an industry-wide figure, not a cost to this organisation."
+  notes: "Arithmetic. The known failure mode is counting INC-2025-0702's $20,700 twice and reporting $41,400."
+
+- qid: "adv-11-redis-pair"
+  question: "Two incidents involved Redis or ElastiCache. Explain how each failed differently, which one was a client-side defect versus a server-side eviction policy defect, and what config value would have prevented each."
+  question_type: cross_document
+  must_mention_ids: ["INC-2025-0501", "INC-2025-0502"]
+  expected_answer_summary: "INC-2025-0501 was the server-side eviction defect (an unsuitable maxmemory-policy caused an eviction storm under memory pressure); INC-2025-0502 was the client-side defect (the client did not re-resolve the primary endpoint after failover)."
+  notes: "Two similar-sounding incidents that must not be blended into one."
+
+- qid: "adv-12-unanswerable-k8s"
+  question: "Summarise the Kubernetes etcd quorum-loss incident: how long was the control plane down, and what was the etcd defrag procedure used to recover it?"
+  question_type: unanswerable
+  expects_refusal: true
+  forbidden_ids: ["INC-2023-1102-CF-CONTROLPLANE", "INC-2025-0901", "INC-2025-0902"]
+  expected_answer_summary: "No Kubernetes or etcd incident exists in this corpus; the ECS and Cloudflare control-plane incidents are not it, and the correct answer is a refusal."
+  notes: "Refusal trap phrased with confident domain detail, and with nearby-but-wrong incidents available to grab."
+
+- qid: "adv-13-depth-sensitivity"
+  question: "Which incident had the longest gap between customer impact starting and the on-call team detecting it, how long was that gap, and what monitoring change was added afterwards to close it? (retrieval-depth check at top-k 10)"
+  question_type: aggregate
+  must_mention_ids: ["INC-2025-0302"]
+  expected_answer_summary: "Same answer as adv-02: INC-2025-0302, a 6 hour 27 minute detection gap. Repeated at a larger top-k to show whether depth alone fixes an aggregate question - it does not."
+  notes: "Deliberate duplicate of adv-02. Run this file at k=10 to compare."

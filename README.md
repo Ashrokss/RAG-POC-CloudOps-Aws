@@ -35,7 +35,14 @@ python -m cli.eval run
 All three commands work out of the box with no cloud credentials - mock mode is auto-detected per
 provider.
 
-**Verified state**: 38/38 pytest tests pass (offline, both providers' mock modes forced regardless
+> **Eval numbers produced before T1 are void.** Until the k cap landed,
+> `hybrid` returned up to 2k documents while every other strategy returned k,
+> so it answered from double the context and was structurally penalised on
+> precision at the same time. Any `reports/` output predating
+> `eval_comparison_t1-t5-baseline` compares strategies on unequal footing -
+> regenerate rather than cite it.
+
+**Verified state**: 87/87 pytest tests pass (offline, both providers' mock modes forced regardless
 of what's in `.env`); `ingest run --reset` indexes 25 RCA docs (20 synthetic + 5 real) into 233
 Chroma chunks; `query ask` and `eval run` both work across all four strategies, in both mock mode
 and against a real live Azure `gpt-4o-mini` deployment (chat generation and the LLM-judge's
@@ -52,14 +59,40 @@ Citations (1):
   the database's hard limit. The push notification was the trigger, not the root cause;
 ```
 
-`eval run` scores all 86 golden questions (`data/golden_qa/golden_qa.yaml`) across all four
-strategies and writes `reports/eval_comparison_<run_label>.{md,csv}`. In mock mode, the `keyword`
+`eval run` scores two question sets in one invocation and reports them separately: the 86 golden
+questions (`data/golden_qa/golden_qa.yaml`, scored on retrieval metrics plus token overlap) and the
+13 adversarial ones (`data/golden_qa/adversarial_qa.yaml`, scored on refusal correctness, required
+incident-id recall, forbidden-id leakage and grounding violations). It writes
+`reports/eval_comparison_<run_label>.{md,csv}`. Run one set with `--sets golden` / `--sets
+adversarial`.
+
+The adversarial set exists because the golden set contains zero unanswerable questions, zero
+aggregates and zero refusal traps - a system that never refuses and never counts scores well on all
+86. Its scoring catches things token overlap cannot: a right incident with a wrong date, or the
+same cost figure counted twice into a total that appears nowhere in the corpus (`eval/grounding.py`).
+
+Questions asking to count, rank, enumerate or total are routed off the vector index entirely
+(`rag/routing/`): top-k retrieval only ever sees k chunks, so "which incident had the longest
+detection gap" is not something a better reranker fixes. The aggregate route hands the model the
+complete incident index - every incident (or every one matching the services the question named),
+with date, severity, status, detection gap, duration and cost - alongside retrieved chunk text, so
+the answer is still citable. `RAGAnswer.route` records which path ran, and the Streamlit console
+shows it. In mock mode, the `keyword`
 strategy gets a perfect MRR (1.000) on `keyword`-type questions - the expected signal that
 validates the harness logic before real credentials exist (see `docs/architecture.md`). Mock-mode
 quality scores run low because `MockChatModel` quotes retrieved text verbatim rather than
 paraphrasing it, so it won't lexically resemble the human-written `expected_answer_summary`
 fields; a live-Azure smoke test (`--limit 4`) already shows meaningfully higher scores (~0.16-0.19
 vs. ~0.06-0.09 in mock mode) now that generation actually paraphrases.
+
+Service names in document frontmatter are normalised at ingest against the curated concept layer in
+`okf/services/*.md` (21 files, one per service, each with its aliases). The corpus was written by
+several people, so `lambda`/`Lambda`, `ec2`/`EC2`, `api-gateway`/`API Gateway` and `ELB`/`ALB`/`alb`
+all appeared as distinct values and any metadata filter on `services` matched roughly half of what
+it should. An unrecognised service name logs a warning naming the `okf/` file that would fix it and
+is passed through unchanged - the curated layer is expected to lag the corpus. The skeletons were
+generated from the corpus inventory and still need their owning SRE to correct `owned_by`,
+`depends_on` and the failure-mode lists in review.
 
 **Known limitations (each fixed once, worth knowing)**:
 - `BM25Retriever`'s default tokenizer is a bare `str.split()` with no lowercasing or punctuation

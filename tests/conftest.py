@@ -6,6 +6,11 @@ LLM_PROVIDER and even on a machine whose .env has real AWS or Azure
 credentials configured. The Settings cache is cleared before and after every
 test so a CHROMA_PERSIST_DIR override in one test can't leak a stale Settings
 instance into the next.
+
+rag_chain's corpus/retriever caches are cleared on the same boundary: they are
+process-wide by design (see rag/chain/rag_chain.py), so without this a test
+that monkeypatches _corpus_chunks or points CHROMA_PERSIST_DIR at its own
+tmp_path would be served a retriever built against the previous test's corpus.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import pytest
 from langchain_core.documents import Document
 
 from config.settings import get_settings
+from rag.chain.rag_chain import reset_corpus_cache
 
 
 @pytest.fixture(autouse=True)
@@ -23,8 +29,10 @@ def _mock_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("BEDROCK_MOCK_MODE", "true")
     monkeypatch.setenv("AZURE_MOCK_MODE", "true")
     get_settings.cache_clear()
+    reset_corpus_cache()
     yield
     get_settings.cache_clear()
+    reset_corpus_cache()
 
 
 @pytest.fixture

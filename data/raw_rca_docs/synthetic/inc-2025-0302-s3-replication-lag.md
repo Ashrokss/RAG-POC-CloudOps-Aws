@@ -10,6 +10,13 @@ account_id: "402918573026"
 status: "resolved"
 tags: ["s3", "cross-region-replication", "data-consistency", "kms-throttling", "caching"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 387
+duration_minutes: 519
+cost_usd: 13200
 ---
 
 ## Summary

@@ -10,6 +10,13 @@ account_id: "719542860133"
 status: "resolved"
 tags: ["ec2", "auto-scaling", "health-checks", "deployment", "flapping"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 1
+duration_minutes: 118
+cost_usd: 380
 ---
 
 ## Summary

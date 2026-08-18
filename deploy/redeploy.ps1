@@ -1,6 +1,11 @@
 # Rebuilds and redeploys streamlit_app.py to the existing Azure App Service.
 # Run from the repo root: .\deploy\redeploy.ps1
 #
+# NOTE: chunk ids are now derived from (doc_id, section, ordinal), so a
+# data/chroma_db/ built before that change carries stale ids. Re-run
+# `python -m cli.ingest run --reset` locally before deploying, or the shipped
+# index and the in-memory chunk list will disagree about what a chunk is.
+#
 # Packages what streamlit_app.py's import chain reaches (see
 # deploy/requirements-deploy.txt's header comment for the dependency
 # exclusions) PLUS data/raw_rca_docs/ - easy to assume that's skippable since
@@ -21,6 +26,11 @@ Copy-Item streamlit_app.py $pkg\
 Copy-Item -Recurse config $pkg\config
 Copy-Item -Recurse rag $pkg\rag
 Copy-Item -Recurse eval $pkg\eval
+# okf/ is the curated service vocabulary the loader normalises against
+# (rag/ingestion/loader.py resolves it relative to rag/, not to cwd). Ship it or
+# every services value stays unnormalised on the deployed app and the aggregate
+# route's service filter matches roughly half the corpus it should.
+Copy-Item -Recurse okf $pkg\okf
 New-Item -ItemType Directory -Path "$pkg\data\chroma_db" -Force | Out-Null
 Copy-Item -Recurse data\chroma_db\* "$pkg\data\chroma_db\"
 New-Item -ItemType Directory -Path "$pkg\data\raw_rca_docs\real" -Force | Out-Null

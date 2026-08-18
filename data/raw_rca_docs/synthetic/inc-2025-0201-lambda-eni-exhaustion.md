@@ -10,6 +10,13 @@ account_id: "702918447365"
 status: "resolved"
 tags: ["lambda", "vpc", "eni", "cold-start", "networking"]
 source: synthetic
+# Extracted by hand from this document's own Impact and Detection sections
+# so aggregate questions (longest detection gap, total cost, duration
+# ranking) can be answered by sorting a column instead of hoping top-k
+# retrieval happens to surface every relevant doc. null = not stated above.
+detection_gap_minutes: 6
+duration_minutes: 103
+cost_usd: 0
 ---
 
 ## Summary

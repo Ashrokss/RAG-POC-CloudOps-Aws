@@ -15,6 +15,19 @@ meaningful label than a function that can't safely ask the OS what time it
 is. It is threaded straight through into the raw-JSONL and (via
 eval/report.py's write_reports) the comparison-report filenames, with no
 generation or defaulting logic beyond the plain default value.
+
+Question sets are a mapping of label -> questions, not one flat list, because
+the golden set and the adversarial set are scored by different judges and
+must never be averaged together: the golden set's 86 questions all have an
+answer sitting in one retrievable chunk, so pooling them with 13 questions
+designed to be unanswerable, corpus-wide or arithmetic would let a strong
+score on the easy set hide a total failure on the hard one. Every record
+carries its set label and the reports break out one table per set.
+
+Retrieval goes through rag_chain.retrieve_for_question rather than
+retrieve_only, so a scored run takes the same route (retrieval or aggregate)
+a user's question would - scoring a path the product doesn't use is how an
+eval harness ends up green while the app is wrong.
 """
 
 from __future__ import annotations
@@ -23,18 +36,34 @@ import json
 import time
 from pathlib import Path
 
-from rag.chain.rag_chain import generate, retrieve_only
+from rag.chain.rag_chain import generate, retrieve_for_question
 from rag.models import GoldenQuestion
 from rag.retrieval.factory import STRATEGIES
+from rag.routing.incident_table import incident_rows
 
-from eval.answer_quality import heuristic_judge, llm_judge
+from eval.answer_quality import adversarial_judge, heuristic_judge, llm_judge
 from eval.retrieval_metrics import mrr, precision_at_k, recall_at_k
 
 _REPORTS_DIR = Path("reports")
 
 
+def _resolve_relevant_doc_ids(golden_question: GoldenQuestion) -> list[str]:
+    """Adversarial questions are authored with incident ids (what a human
+    knows) and no doc ids (UUIDs nobody should hand-copy); retrieval metrics
+    need doc ids. Resolve one to the other against the incident table."""
+    if golden_question.relevant_doc_ids or not golden_question.must_mention_ids:
+        return golden_question.relevant_doc_ids
+
+    by_incident = {row["incident_id"]: row["doc_id"] for row in incident_rows()}
+    return [
+        by_incident[incident_id]
+        for incident_id in golden_question.must_mention_ids
+        if incident_id in by_incident
+    ]
+
+
 def run_eval(
-    golden_questions: list[GoldenQuestion],
+    question_sets: dict[str, list[GoldenQuestion]],
     strategies: list[str] | None = None,
     k: int = 5,
     judge: str = "heuristic",
@@ -48,48 +77,86 @@ def run_eval(
     records: list[dict] = []
     with raw_path.open("w", encoding="utf-8") as raw_file:
         for strategy in resolved_strategies:
-            for golden_question in golden_questions:
-                start = time.perf_counter()
-                docs = retrieve_only(golden_question.question, strategy, k)
-                retrieved_doc_ids = list(dict.fromkeys(doc.metadata["doc_id"] for doc in docs))
-                answer, citations = generate(golden_question.question, docs)
-                latency_ms = (time.perf_counter() - start) * 1000
-
-                if judge == "heuristic":
-                    judge_result = heuristic_judge(
-                        answer,
-                        golden_question.expected_answer_summary,
-                        citations,
-                        golden_question.relevant_doc_ids,
+            for set_label, golden_questions in question_sets.items():
+                for golden_question in golden_questions:
+                    records.append(
+                        _score_one(
+                            golden_question, set_label, strategy, k, judge, run_label, raw_file
+                        )
                     )
-                elif judge == "llm":
-                    judge_result = llm_judge(
-                        golden_question.question, answer, golden_question.expected_answer_summary
-                    )
-                else:
-                    raise ValueError(f"Unknown judge: {judge!r}. Valid judges: 'heuristic', 'llm'.")
-
-                record = {
-                    "run_label": run_label,
-                    "strategy": strategy,
-                    "question_type": golden_question.question_type,
-                    "qid": golden_question.qid,
-                    "question": golden_question.question,
-                    "recall": recall_at_k(retrieved_doc_ids, golden_question.relevant_doc_ids),
-                    "precision": precision_at_k(retrieved_doc_ids, golden_question.relevant_doc_ids),
-                    "mrr": mrr(retrieved_doc_ids, golden_question.relevant_doc_ids),
-                    "quality_score": judge_result["quality_score"],
-                    "latency_ms": latency_ms,
-                    "retrieved_doc_ids": retrieved_doc_ids,
-                    "relevant_doc_ids": golden_question.relevant_doc_ids,
-                    "answer": answer,
-                    "citations": [citation.model_dump() for citation in citations],
-                    "judge": judge,
-                    "judge_details": {
-                        field: value for field, value in judge_result.items() if field != "quality_score"
-                    },
-                }
-                records.append(record)
-                raw_file.write(json.dumps(record) + "\n")
 
     return records
+
+
+def _score_one(
+    golden_question: GoldenQuestion,
+    set_label: str,
+    strategy: str,
+    k: int,
+    judge: str,
+    run_label: str,
+    raw_file,
+) -> dict:
+    start = time.perf_counter()
+    docs, index_block, route = retrieve_for_question(golden_question.question, strategy, k)
+    retrieved_doc_ids = list(dict.fromkeys(doc.metadata["doc_id"] for doc in docs))
+    answer, citations = generate(golden_question.question, docs, index_block)
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    relevant_doc_ids = _resolve_relevant_doc_ids(golden_question)
+
+    if golden_question.is_adversarial:
+        judge_name = "adversarial"
+        judge_result = adversarial_judge(golden_question, answer, citations, docs)
+    elif judge == "heuristic":
+        judge_name = judge
+        judge_result = heuristic_judge(
+            answer, golden_question.expected_answer_summary, citations, relevant_doc_ids
+        )
+    elif judge == "llm":
+        judge_name = judge
+        judge_result = llm_judge(
+            golden_question.question, answer, golden_question.expected_answer_summary
+        )
+    else:
+        raise ValueError(f"Unknown judge: {judge!r}. Valid judges: 'heuristic', 'llm'.")
+
+    record = {
+        "run_label": run_label,
+        "question_set": set_label,
+        "strategy": strategy,
+        "route": route,
+        "question_type": golden_question.question_type,
+        "qid": golden_question.qid,
+        "question": golden_question.question,
+        "recall": recall_at_k(retrieved_doc_ids, relevant_doc_ids),
+        "precision": precision_at_k(retrieved_doc_ids, relevant_doc_ids),
+        "mrr": mrr(retrieved_doc_ids, relevant_doc_ids),
+        "quality_score": judge_result["quality_score"],
+        "latency_ms": latency_ms,
+        "retrieved_doc_ids": retrieved_doc_ids,
+        "relevant_doc_ids": relevant_doc_ids,
+        "answer": answer,
+        "citations": [citation.model_dump() for citation in citations],
+        "judge": judge_name,
+        "judge_details": {
+            field: value for field, value in judge_result.items() if field != "quality_score"
+        },
+    }
+    # Adversarial sub-scores are promoted to top-level numeric fields so
+    # aggregate_metrics averages them into the report instead of leaving them
+    # buried in judge_details where nothing reads them.
+    for field in (
+        "refusal_correct",
+        "required_id_recall",
+        "forbidden_id_leak",
+        "grounding_violations",
+        "grounding_date_violations",
+        "grounding_number_violations",
+        "grounding_unretrieved_incidents",
+    ):
+        if field in judge_result:
+            record[field] = judge_result[field]
+
+    raw_file.write(json.dumps(record) + "\n")
+    return record
