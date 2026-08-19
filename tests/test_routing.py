@@ -15,7 +15,7 @@ from langchain_core.documents import Document
 import rag.chain.rag_chain as rag_chain_module
 from config.settings import get_settings
 from rag.chain.rag_chain import retrieve_for_question
-from rag.routing.dependency_graph import downstream_of, render_impact
+from rag.routing.dependency_graph import check_dependency_completeness, downstream_of, render_impact
 from rag.routing.incident_table import filter_rows, incident_rows, render_rows
 from rag.routing.router import classify, question_services
 from rag.vectorstore.chroma_store import build_index
@@ -88,6 +88,55 @@ def test_render_impact_marks_no_dependents_as_recorded_not_absent() -> None:
 
     rendered = render_impact({"rds": downstream_of("rds")})
     assert "glue" in rendered and "step-functions" in rendered
+
+
+_ACM_IMPACT_BLOCK = (
+    "### DEPENDENCY IMPACT ###\n"
+    "acm -> depended on by (directly or transitively): alb, cloudfront, ecs, route-53"
+)
+
+
+def test_dependency_completeness_passes_when_every_service_is_named() -> None:
+    # Mixed display forms on purpose - the check must match by any alias
+    # okf/services/*.md declares, not just the bare lowercase id.
+    answer = (
+        "If ACM had an outage, the ALB listener and CloudFront distribution that use its "
+        "certificate would fail, and so would ECS (behind the ALB) and Route 53 (whose "
+        "health check depends on the certificate too)."
+    )
+
+    assert check_dependency_completeness(answer, _ACM_IMPACT_BLOCK) == []
+
+
+def test_dependency_completeness_catches_a_silently_dropped_transitive_service() -> None:
+    # The actual live failure a blast_radius spot-check produced: the model
+    # named only the two services also mentioned in a retrieved incident
+    # excerpt (ALB, CloudFront) and dropped the two transitive ones that had
+    # no supporting narrative (ECS, Route 53).
+    answer = (
+        "If ACM had an outage, the ALB listener and CloudFront distribution that use its "
+        "certificate for HTTPS would fail."
+    )
+
+    violations = check_dependency_completeness(answer, _ACM_IMPACT_BLOCK)
+
+    assert {v["missing_service"] for v in violations} == {"ecs", "route-53"}
+    assert all(v["origin"] == "acm" for v in violations)
+
+
+def test_dependency_completeness_is_a_noop_without_a_dependency_impact_block() -> None:
+    # aggregate's '### INCIDENT INDEX ###' block, or plain retrieval with no
+    # index_block at all - neither should be parsed as a dependency block.
+    answer = "Nothing here mentions ECS, ALB, CloudFront, or Route 53 at all."
+
+    assert check_dependency_completeness(answer, "### INCIDENT INDEX ###\nsome rows here") == []
+    assert check_dependency_completeness(answer, "") == []
+
+
+def test_dependency_completeness_treats_none_recorded_as_nothing_to_check() -> None:
+    block = "### DEPENDENCY IMPACT ###\nsqs -> depended on by (directly or transitively): none recorded"
+
+    assert check_dependency_completeness("SQS has no recorded dependents.", block) == []
 
 
 def test_blast_radius_route_downgrades_to_retrieval_with_no_named_service(

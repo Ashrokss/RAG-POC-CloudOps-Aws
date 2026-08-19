@@ -46,7 +46,12 @@ from rag.ingestion.loader import CORPUS_DIRS, load_rca_documents
 from rag.llm.factory import get_chat_model
 from rag.models import Citation, RAGAnswer
 from rag.retrieval.factory import get_retriever
-from rag.routing.dependency_graph import downstream_of, render_impact, reset_dependency_graph
+from rag.routing.dependency_graph import (
+    check_dependency_completeness,
+    downstream_of,
+    render_impact,
+    reset_dependency_graph,
+)
 from rag.routing.incident_table import filter_rows, incident_rows, render_rows, reset_incident_table
 from rag.routing.router import classify, question_services
 from rag.vectorstore.chroma_store import get_vectorstore
@@ -226,12 +231,20 @@ def generate(question: str, docs: list[Document], index_block: str = "") -> tupl
     answer = chain.invoke({"context": context, "question": question})
     citations = _resolve_citations(answer, docs)
 
+    # A DEPENDENCY IMPACT answer is instructed to state structural facts with
+    # no citation tag unless an excerpt genuinely backs one - zero citations
+    # there is the designed outcome, not the defect the check below exists
+    # for. Applying it anyway told the model to "cite every claim... or drop
+    # any claim you cannot cite", and a live spot-check showed that push is
+    # exactly what made it drop the two services it had no excerpt for.
+    is_dependency_answer = "### DEPENDENCY IMPACT ###" in index_block
+
     # A live bake-off found 5-7 of 13 answers per strategy named an incident
     # in prose without a resolvable citation tag - unauditable, since a
     # reviewer can't check a claim with no marker pointing at its source.
     # One retry with an explicit correction, rather than shipping that
     # answer: a refusal legitimately has zero citations, so it's excluded.
-    if not citations and INSUFFICIENT_EVIDENCE_PHRASE not in answer.lower():
+    if not is_dependency_answer and not citations and INSUFFICIENT_EVIDENCE_PHRASE not in answer.lower():
         retry_question = (
             f"{question}\n\n"
             "Your previous answer did not cite any source chunk. Revise it: "
@@ -240,6 +253,26 @@ def generate(question: str, docs: list[Document], index_block: str = "") -> tupl
         )
         answer = chain.invoke({"context": context, "question": retry_question})
         citations = _resolve_citations(answer, docs)
+
+    # The DEPENDENCY IMPACT block's own counterpart to the citation retry
+    # above: a live spot-check found the model handed all four of ACM's
+    # downstream services but named only the two also mentioned in a
+    # retrieved excerpt, silently dropping the two transitive ones that had
+    # no supporting text. One retry naming exactly what was missed, rather
+    # than shipping an answer that quietly under-reports a structural fact.
+    if is_dependency_answer:
+        missing = check_dependency_completeness(answer, index_block)
+        if missing:
+            missing_ids = ", ".join(sorted({violation["missing_service"] for violation in missing}))
+            retry_question = (
+                f"{question}\n\n"
+                f"Your previous answer omitted the following service(s) that the "
+                f"DEPENDENCY IMPACT block lists as affected: {missing_ids}. Revise your "
+                f"answer to explicitly name every service the block lists, including "
+                f"these - no incident citation is required to include them."
+            )
+            answer = chain.invoke({"context": context, "question": retry_question})
+            citations = _resolve_citations(answer, docs)
 
     return answer, citations
 

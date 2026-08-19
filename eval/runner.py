@@ -45,6 +45,7 @@ from rag.routing.incident_table import incident_rows
 
 from eval.answer_quality import adversarial_judge, heuristic_judge, llm_judge
 from eval.retrieval_metrics import mrr, precision_at_k, recall_at_k
+from rag.routing.dependency_graph import check_dependency_completeness
 
 _REPORTS_DIR = Path("reports")
 
@@ -159,6 +160,17 @@ def _score_one(
     ):
         if field in judge_result:
             record[field] = judge_result[field]
+
+    # Independent of the judge/adversarial branch above: this checks whether
+    # the answer's prose named every downstream service the blast_radius
+    # route handed the model, not whether the answer is otherwise good - a
+    # golden-set blast_radius question is not adversarial, so it would
+    # otherwise never get checked for exactly the completeness gap a live
+    # spot-check found (ACM's transitive dependents silently dropped).
+    if route == "blast_radius":
+        dependency_violations = check_dependency_completeness(answer, index_block)
+        record["dependency_completeness_violations"] = len(dependency_violations)
+        record["dependency_completeness_details"] = dependency_violations
 
     raw_file.write(json.dumps(record) + "\n")
     return record

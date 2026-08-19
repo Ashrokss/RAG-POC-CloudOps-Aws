@@ -14,9 +14,15 @@ of an infinite loop.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
-from rag.ingestion.loader import service_dependency_graph
+from rag.ingestion.loader import service_alias_map, service_dependency_graph
+
+_IMPACT_LINE_RE = re.compile(
+    r"^(?P<origin>[\w-]+) -> depended on by \(directly or transitively\): (?P<downstream>.+)$",
+    re.MULTILINE,
+)
 
 
 @lru_cache(maxsize=1)
@@ -66,3 +72,47 @@ def render_impact(impact: dict[str, list[str]]) -> str:
         rendered = ", ".join(downstream) if downstream else "none recorded"
         lines.append(f"{service_id} -> depended on by (directly or transitively): {rendered}")
     return "\n".join(lines)
+
+
+def check_dependency_completeness(answer: str, index_block: str) -> list[dict]:
+    """Downstream service ids render_impact() named that never appear (by
+    canonical id, display name, or any okf/services/*.md alias) anywhere in
+    the answer's prose.
+
+    Lives here, not in eval/, because rag/chain/rag_chain.py's generate()
+    uses it directly to decide whether to retry a live answer, not only to
+    score one after the fact - a live spot-check found the model handed all
+    four of ACM's downstream services but narrated only the two also named
+    in a retrieved incident excerpt, silently dropping the two transitive
+    ones that had no supporting text. A token-overlap or grounding check
+    (eval/grounding.py) cannot see this: the answer stated nothing false, it
+    omitted true, structurally-given facts - so this checks presence, not
+    accuracy.
+
+    Deliberately lenient on matching: 'ecs' passes if the answer says 'ECS',
+    'Amazon ECS', or any alias okf/services/ecs.md declares, not just the
+    bare canonical id."""
+    if "### DEPENDENCY IMPACT ###" not in index_block:
+        return []
+
+    aliases_by_id: dict[str, list[str]] = {}
+    for alias, service_id in service_alias_map().items():
+        aliases_by_id.setdefault(service_id, []).append(alias)
+
+    violations: list[dict] = []
+    for line_match in _IMPACT_LINE_RE.finditer(index_block):
+        origin = line_match.group("origin")
+        downstream_ids = [
+            entry.strip()
+            for entry in line_match.group("downstream").split(",")
+            if entry.strip() and entry.strip() != "none recorded"
+        ]
+        for service_id in downstream_ids:
+            candidates = aliases_by_id.get(service_id, [service_id])
+            named = any(
+                re.search(rf"(?<![\w-]){re.escape(alias)}(?![\w-])", answer, re.IGNORECASE)
+                for alias in candidates
+            )
+            if not named:
+                violations.append({"origin": origin, "missing_service": service_id})
+    return violations

@@ -132,17 +132,28 @@ this deserve a concept file?" call.
 **6. `api/main.py` has no authentication**, and Chroma persists to container-local disk (no shared
 state across instances, re-ingest on every redeploy). Both flagged, neither in scope for this pass.
 
-**7. `blast_radius` under-reports transitive dependents when a concrete incident excerpt is also in
-context.** Asking live "what would be affected downstream if ACM had an outage" - the `### DEPENDENCY
-IMPACT ###` block correctly listed all four (`alb, cloudfront, ecs, route-53`; verified directly via
-`blast_radius_context()`), but the model's prose named only `alb` and `cloudfront`, the two also
-mentioned by name in the one retrieved incident excerpt (INC-2025-0801) - it appears to have anchored
-on the concrete narrative and dropped the two transitive dependents that had no supporting text. The
-single-hop RDS question (no ambiguity between direct/transitive) answered correctly with zero
-citations, exactly as designed, so this looks specific to the direct-vs-transitive split rather than
-the route generally. Ad hoc spot check, not yet a golden/adversarial assertion - worth either a
-prompt tweak (state the full DEPENDENCY IMPACT list before narrating the excerpt) or a grounding-style
-check asserting every id in the block's downstream list appears in the answer.
+**7. ~~`blast_radius` under-reports transitive dependents~~ Fixed - it was a routing bug, not the model
+dropping facts.** The original diagnosis blamed the model: asked live "what would be affected
+downstream if ACM had an outage," it named only 2 of 4 services the dependency graph says are
+affected. That diagnosis was wrong, and wrong for an instructive reason - the "verification" that
+the model had all four in front of it called `blast_radius_context()` directly, which builds the
+block unconditionally and does not go through `classify()`. Checking `classify()` itself on the
+exact question wording showed the real bug: `_BLAST_RADIUS_RE` required the literal adjacent phrase
+"affected if", and "affected **downstream** if" - an entirely natural way to ask this - has a word
+in between and doesn't match it. The question was routing to plain `retrieval` the whole time, with
+no dependency graph in its context at all; the model was never given the two services it "dropped."
+Confirmed directly (`classify(...)` returned `"retrieval"`), fixed (the regex now tolerates up to 3
+words between the trigger verb and "if"), and re-checked against every golden/adversarial question
+to confirm nothing else newly misclassified. Re-verified live afterward: the ACM question now
+correctly lists all four (`alb, cloudfront, ecs, route-53`) with zero citations, as designed.
+
+Two smaller improvements made while chasing the wrong theory were kept anyway, since they're correct
+independent of it: the citation retry in `generate()` no longer fires for a `### DEPENDENCY IMPACT
+###` answer (it's designed to have zero citations unless an excerpt backs one - retrying it with
+"cite every claim or drop it" was always a latent bug waiting to matter), and a new
+`check_dependency_completeness()` (`rag/routing/dependency_graph.py`) triggers one retry naming
+exactly what's missing if a model ever does drop a listed service for a different reason. Both are
+unit-tested with a scripted stub model, not just live spot-checks.
 
 ---
 

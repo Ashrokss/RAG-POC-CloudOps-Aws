@@ -41,9 +41,17 @@ Route = Literal["retrieval", "aggregate", "blast_radius"]
 
 _BLAST_RADIUS_RE = re.compile(
     r"\b(depends? on|dependent on|dependenc(?:y|ies) of|relies? on|reliant on|"
-    r"downstream of|downstream impact|blast radius|breaks? if|fails? if|affected if)\b",
+    r"downstream of|downstream impact|blast radius|"
+    r"(?:affected|breaks?|fails?)\b(?:\s+\w+){0,3}\s+if\b)",
     re.IGNORECASE,
 )
+# The (?:\s+\w+){0,3} gap exists because "what would be affected downstream
+# if X had an outage" - an entirely natural way to ask this - does not
+# contain the literal phrase "affected if"; a rigid adjacent-phrase match
+# missed it, silently falling through to plain retrieval with no dependency
+# graph at all. That is a routing bug, not a prompt-compliance one: a live
+# spot-check that looked like the model dropping transitive dependents was
+# actually this question never reaching blast_radius in the first place.
 
 # "between X and Y" was in the first draft of this list and is gone on
 # evidence: it caught no adversarial question that "longest"/"every" did not
