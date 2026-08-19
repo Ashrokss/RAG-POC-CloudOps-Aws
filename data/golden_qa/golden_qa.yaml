@@ -1,0 +1,618 @@
+# Golden question-answer set for the RAG evaluation harness. Every question is
+# hand-authored against the 20 synthetic RCA docs in data/raw_rca_docs/synthetic/
+# so expected_answer_summary is always traceable to a specific doc's Root Cause,
+# Timeline, or Resolution section rather than a paraphrase of a paraphrase.
+#
+# The keyword-type questions each reuse an exact substring from the source doc
+# body on purpose - that is what lets a BM25/keyword retriever score them well,
+# which is the point of comparison against the semantic-type questions asking
+# about the same fact with deliberately non-overlapping vocabulary.
+
+- qid: "37eadf7b-16f2-4890-813e-95fbd7197c6b"
+  question: "What was the root cause of INC-2025-0101?"
+  question_type: factual
+  relevant_doc_ids: ["ff1500b6-527b-442a-ba8e-6fc87c224de3"]
+  expected_answer_summary: "checkout-order-processor opened a new raw psycopg2 connection per invocation instead of using a pooled connection (e.g. RDS Proxy), and with no ReservedConcurrentExecutions ceiling set, a 9x traffic spike let it scale to 2,800 concurrent executions, driving connection demand past orders-prod-pg's max_connections=500."
+  notes: ""
+
+- qid: "cb3b4fb9-d750-480a-8e52-5ca2cf1a9b04"
+  question: "How did the on-call team mitigate the RDS IOPS throttling incident, INC-2025-0102?"
+  question_type: factual
+  relevant_doc_ids: ["f8c8d772-7708-4a36-aeb6-8ec48c00cc52"]
+  expected_answer_summary: "On-call increased provisioned IOPS on analytics-prod-mysql from 3,000 to 8,000 via aws rds modify-db-instance --apply-immediately, which applied without downtime for the gp3 volume and let WriteIOPS utilization fall to 61%."
+  notes: ""
+
+- qid: "47e4d4df-1355-4362-b7e4-2329dcef1e44"
+  question: "Which subnet ran out of IP addresses in INC-2025-0201, and what fixed it?"
+  question_type: factual
+  relevant_doc_ids: ["fe5019d4-a53d-4734-8d7d-be844151c3d7"]
+  expected_answer_summary: "subnet-0a1b2c3d4e5f67890, a /26 block shared by four VPC-attached Lambda functions and EC2 batch workers, ran out of free IPv4 addresses; on-call added a second, larger /24 subnet, subnet-0f9e8d7c6b5a43210, to payments-webhook-handler's VPC configuration."
+  notes: ""
+
+- qid: "19481698-bff0-4a0a-9203-a602ca75dc65"
+  question: "Why was notification-dispatcher throttled during the May 30, 2025 launch spike in INC-2025-0202?"
+  question_type: factual
+  relevant_doc_ids: ["00d240fe-644d-450e-aa61-cb7d3c208ad5"]
+  expected_answer_summary: "Its ReservedConcurrentExecutions had been fixed at 50 during a March 2025 cost-optimization pass and never revisited, and a reservation is a hard ceiling that cannot borrow from the account's otherwise-idle unreserved concurrency pool, so the launch spike's demand was rejected outright once it exceeded 50."
+  notes: ""
+
+- qid: "f154e92e-6deb-470f-96b5-ab99f75c22bf"
+  question: "What caused the S3 403 errors in INC-2025-0301?"
+  question_type: factual
+  relevant_doc_ids: ["ae15d9eb-da95-48a3-a12f-2833868ba966"]
+  expected_answer_summary: "PR #4821 replaced reports-export-prod's hand-written bucket policy with a Terraform-generated one whose merge referenced a stale data source, silently dropping the AllowCloudFrontOAI statement so the bucket defaulted to implicit deny for the CloudFront origin access identity."
+  notes: ""
+
+- qid: "c4bcf875-a2f2-4da8-b547-e23006c6c531"
+  question: "What made the S3 cross-region replication lag in INC-2025-0302 customer-facing rather than just a backend delay?"
+  question_type: factual
+  relevant_doc_ids: ["cb8eac5b-9878-4251-8db9-82347b154dc3"]
+  expected_answer_summary: "CloudFront's regional read origin in us-west-2 treated the replica bucket as authoritative regardless of ReplicationLatency and kept serving the last-replicated (stale) object version instead of falling back to the source region, so KMS-throttled replication lag turned directly into stale prices and stock at checkout."
+  notes: ""
+
+- qid: "de5cdcec-2939-4981-9cf9-d13efc8599de"
+  question: "What target-group setting caused dropped in-flight checkout requests during ASG scale-in in INC-2025-0401?"
+  question_type: factual
+  relevant_doc_ids: ["2317f2b0-e9df-4bb2-9a64-9e323dc17452"]
+  expected_answer_summary: "checkout-tg's deregistration_delay.timeout_seconds attribute was left at 0 because the Terraform module that created it set no explicit default, so the ALB deregistered terminating instances with zero connection draining and reset any in-flight requests."
+  notes: ""
+
+- qid: "8271c9f3-d1f9-41b4-a7c2-66dfb2b836da"
+  question: "Why did orders-api-asg enter a flapping instance-replacement loop in INC-2025-0402?"
+  question_type: factual
+  relevant_doc_ids: ["81d319d3-40d3-4f43-8af1-2b4f69167ea5"]
+  expected_answer_summary: "A v3.6.0 deploy added a synchronous cache-warming step that extended orders-api's startup time from about 20 seconds to about 90 seconds, but the ASG's HealthCheckGracePeriod remained at 30 seconds, so every new instance was marked unhealthy and terminated before it could finish starting, and each replacement hit the same problem."
+  notes: ""
+
+- qid: "80f9bc7d-7c72-477a-9842-2829d8ba950e"
+  question: "What Redis configuration mismatch caused the eviction storm in INC-2025-0501?"
+  question_type: factual
+  relevant_doc_ids: ["b61f30fb-81d0-4922-8041-8be5f4ad7eea"]
+  expected_answer_summary: "session-service v2.14.0 started writing session keys without a TTL, but sessions-redis-001's maxmemory-policy was volatile-lru, which only evicts keys that carry an expiry, so the non-expiring keys permanently occupied memory until the cluster hit 99.7% of maxmemory and began rejecting writes."
+  notes: ""
+
+- qid: "7075696b-8b18-4474-89f8-bea963d89ca8"
+  question: "What triggered the brief write errors on orders-cache-prod in INC-2025-0502?"
+  question_type: factual
+  relevant_doc_ids: ["7761f1cb-19bd-4cf3-b9c9-6548de597742"]
+  expected_answer_summary: "AWS applied a routine Redis 7.0.7-to-7.1.0 engine-version patch during the cluster's scheduled maintenance window, which triggered an automatic failover promoting a replica to primary; the client library's lack of retry-on-timeout and reliance on 30-second DNS TTL caused a short window of failed writes during the topology change."
+  notes: ""
+
+- qid: "db5b434e-daff-41cc-8132-f4f830c86db2"
+  question: "What was the underlying account-level constraint behind the API Gateway 429s in INC-2025-0601?"
+  question_type: factual
+  relevant_doc_ids: ["e12951e9-da01-4b96-85a6-38805cc34f85"]
+  expected_answer_summary: "The us-east-1 account-level API Gateway throttle remained at the AWS default (10,000 RPS steady-state, 5,000-request burst), and no Service Quota increase had been requested even though marketing had shared a 12,000 RPS peak-traffic projection three days before the campaign."
+  notes: ""
+
+- qid: "aecc7884-b846-4f49-aa33-443f70a24398"
+  question: "What two independent changes combined to cause the 504 errors in INC-2025-0602?"
+  question_type: factual
+  relevant_doc_ids: ["42c22167-17cf-49db-8a1e-4b1d8f2ba396"]
+  expected_answer_summary: "A new transitive dependency bloated order-enrichment-svc's deployment package from 46 MB to 268 MB, lengthening cold starts, and the same Terraform apply omitted provisioned_concurrent_executions, resetting provisioned concurrency from 20 to 0, so nearly every request cold-started past API Gateway's fixed 29-second timeout."
+  notes: ""
+
+- qid: "b4bb4778-1a44-4254-91ca-28a373ceeb9c"
+  question: "Why did the tenant_00042 batch import throttle in INC-2025-0701 despite customer-events-prod having 4,000 WCU provisioned?"
+  question_type: factual
+  relevant_doc_ids: ["fca24f95-19cb-4418-908f-2b49974a6f9f"]
+  expected_answer_summary: "Every one of the 2.4 million imported records shared the same partition key value (tenant_id = tenant_00042), and DynamoDB enforces a hard per-partition ceiling of 1,000 WCU regardless of the table's overall provisioned throughput, so the single-key burst was throttled even though aggregate table capacity was unused."
+  notes: ""
+
+- qid: "367c251b-de2f-49f2-b6cd-b715cdda3bb4"
+  question: "What combination of causes led to the DynamoDB cost and latency spike in INC-2025-0702?"
+  question_type: factual
+  relevant_doc_ids: ["1d1168e0-5a88-4c52-ad00-03bec93ebd87"]
+  expected_answer_summary: "orders-prod had no GSI covering lookups by customer_email or status, so two code paths used full-table Scans, and an EventBridge schedule bug ran the reconciliation job every 15 minutes instead of daily, multiplying scan frequency roughly 96x and driving both cost and checkout read latency up."
+  notes: ""
+
+- qid: "e90a181d-9eba-42c7-b085-21126723dcc7"
+  question: "Why did not the ACM certificate for www.acmecloudops.com auto-renew before it expired in INC-2025-0801?"
+  question_type: factual
+  relevant_doc_ids: ["5040b325-bf2f-4ffb-8f90-c1a89f69e831"]
+  expected_answer_summary: "Its DNS validation CNAME had been deleted from Route 53 during an unrelated hosted-zone cleanup 63 days before expiry, silently disabling auto-renewal, and the resulting renewal-failure emails from ACM went to an alias with no active subscriber."
+  notes: ""
+
+- qid: "0e5fa406-bf89-474d-aa31-89f47348a0c7"
+  question: "What caused the ALB target-group health checks to flap during the prod-web-service v2.38.0 deploy in INC-2025-0802?"
+  question_type: factual
+  relevant_doc_ids: ["4c51612d-46bc-42b1-a6f0-faa18404fd2a"]
+  expected_answer_summary: "The new task definition cut the Fargate container memory limit from 2048 MiB to 1024 MiB but left the JVM's -Xmx1536m heap flag unchanged, causing frequent 700ms-1.2s full-GC pauses that occasionally pushed the DB-coupled /healthz check past its 5-second timeout and got targets marked unhealthy."
+  notes: ""
+
+- qid: "398ddd29-3790-4c0d-8a21-7aad76442823"
+  question: "Why were metrics-ingestor-svc tasks OOMKilled in INC-2025-0901?"
+  question_type: factual
+  relevant_doc_ids: ["0bf82776-629e-41c6-bcdc-cebf6d349e88"]
+  expected_answer_summary: "A pandas (1.5.3 to 2.1.1) and numpy (1.24.4 to 1.26.0) dependency upgrade raised the service's steady-state memory footprint from roughly 380 MB to roughly 640 MB per task, exceeding the task definition's unchanged 512 MiB hard memory limit, so the Fargate kernel repeatedly killed the container."
+  notes: ""
+
+- qid: "60eda6ed-362e-4c76-80f8-a0cce002c3c6"
+  question: "Why did prod-checkout-svc fail to scale out during the flash sale in INC-2025-0902?"
+  question_type: factual
+  relevant_doc_ids: ["90e3ea03-4631-45d3-a7ee-349ab267ccba"]
+  expected_answer_summary: "Its two production subnets were /26 blocks already shared with cart-svc and pricing-svc, leaving only about 23 free IP addresses combined, so when Application Auto Scaling tried to add 120 new Fargate tasks, most placements failed at ENI creation and real capacity was capped far below the desired 160 tasks."
+  notes: ""
+
+- qid: "2968c596-6321-4a93-9062-65f816d7761e"
+  question: "What NAT Gateway limit was exceeded in INC-2025-1001, and why?"
+  question_type: factual
+  relevant_doc_ids: ["61a6d661-a53d-4002-a8a9-96f1694f3726"]
+  expected_answer_summary: "Scaling payment-worker-asg from 40 to 260 instances drove aggregate concurrent connections to the payment gateway's small set of fixed upstream IPs past the single NAT Gateway's 55,000-simultaneous-connections-per-destination limit, since all outbound traffic funneled through one NAT Gateway."
+  notes: ""
+
+- qid: "2e0a5515-1a7a-4b62-a10c-3136979f904e"
+  question: "Why could Lambda not assume nightly-billing-reconciler-role after the Terraform module bump in INC-2025-1002?"
+  question_type: factual
+  relevant_doc_ids: ["f0351ec8-1a0b-4015-b0c1-0a7842c9b185"]
+  expected_answer_summary: "Module v3.0.0 silently dropped a renamed trust-policy input variable and fell back to a default template that added an sts:ExternalId condition to the lambda.amazonaws.com principal statement, a condition the Lambda service principal never supplies, so every AssumeRole attempt was denied."
+  notes: ""
+
+- qid: "1077cede-c210-4c71-9658-cf6ecad75bdb"
+  question: "Which incident's application logs show the error `FATAL: sorry, too many clients already`?"
+  question_type: keyword
+  relevant_doc_ids: ["ff1500b6-527b-442a-ba8e-6fc87c224de3"]
+  expected_answer_summary: "INC-2025-0101, where checkout-order-processor's unpooled raw psycopg2 connections against orders-prod-pg exceeded max_connections=500 during a 9x traffic spike."
+  notes: ""
+
+- qid: "3ed9aa25-843d-42c0-8895-c070d320c6df"
+  question: "What caused the Glue job failure logged as `java.sql.SQLTimeoutException: Statement cancelled due to timeout or client request` in INC-2025-0102?"
+  question_type: keyword
+  relevant_doc_ids: ["f8c8d772-7708-4a36-aeb6-8ec48c00cc52"]
+  expected_answer_summary: "glue-job-daily-aggregate exceeded its 30-minute timeout because analytics-prod-mysql's WriteIOPS was pinned at its provisioned 3,000 ceiling by the nightly ETL's growing write volume, queuing writes and stalling the dependent Glue job."
+  notes: ""
+
+- qid: "dd2ba5f1-eae2-4134-a560-17940eb38898"
+  question: "Which incident logged `EniLimitExceededException: The elastic network interface capacity for your account has been reached in this Availability Zone`?"
+  question_type: keyword
+  relevant_doc_ids: ["fe5019d4-a53d-4734-8d7d-be844151c3d7"]
+  expected_answer_summary: "INC-2025-0201, caused by IP-address exhaustion in subnet-0a1b2c3d4e5f67890 after three new VPC-attached Lambda deploys plus a partner traffic burst drove Hyperplane ENI consumption past the subnet's available address space."
+  notes: ""
+
+- qid: "b6a590e3-9b79-4b8a-849f-183490ca0ab6"
+  question: "What caused the error `Rate Exceeded: Reserved concurrent execution limit exceeded` in INC-2025-0202?"
+  question_type: keyword
+  relevant_doc_ids: ["00d240fe-644d-450e-aa61-cb7d3c208ad5"]
+  expected_answer_summary: "notification-dispatcher's ReservedConcurrentExecutions had been fixed at 50 since March 2025 and never revisited, so the May 30 product-launch traffic spike exceeded that hard ceiling and every invocation beyond it was rejected synchronously."
+  notes: ""
+
+- qid: "c8fdac58-62be-4d28-8a9e-cbd852f634df"
+  question: "Which incident's S3 origin returned `<Code>AccessDenied</Code><Message>Access Denied</Message>`?"
+  question_type: keyword
+  relevant_doc_ids: ["ae15d9eb-da95-48a3-a12f-2833868ba966"]
+  expected_answer_summary: "INC-2025-0301, after PR #4821's flawed Terraform merge silently dropped the AllowCloudFrontOAI statement from reports-export-prod's bucket policy, leaving no Allow statement for the CloudFront OAI principal."
+  notes: ""
+
+- qid: "6497d653-eeb5-4106-8f70-0736b9c122d7"
+  question: "What triggered the `ThrottlingException: Rate exceeded` errors on `kms:Decrypt` calls in INC-2025-0302?"
+  question_type: keyword
+  relevant_doc_ids: ["cb8eac5b-9878-4251-8db9-82347b154dc3"]
+  expected_answer_summary: "S3 cross-region replication issuing a kms:Decrypt and kms:Encrypt call per replicated SSE-KMS object, for a 2.3 million-object nightly catalog batch written in a 22-minute burst, exceeded the account's 5,500 requests/second KMS quota."
+  notes: ""
+
+- qid: "3205f217-3b54-4750-b8d9-b40f68eeb1b9"
+  question: "Which incident's ALB access logs show the error_reason `TargetConnectionTermination`?"
+  question_type: keyword
+  relevant_doc_ids: ["2317f2b0-e9df-4bb2-9a64-9e323dc17452"]
+  expected_answer_summary: "INC-2025-0401, where checkout-tg's deregistration_delay.timeout_seconds of 0 caused the ALB to reset in-flight connections the instant the ASG scaled in and deregistered targets."
+  notes: ""
+
+- qid: "1f4f1fc1-e55b-4cde-b52e-e4a17e21ed46"
+  question: "What caused the EC2 API error `RequestLimitExceeded: Request limit exceeded.` during INC-2025-0402?"
+  question_type: keyword
+  relevant_doc_ids: ["81d319d3-40d3-4f43-8af1-2b4f69167ea5"]
+  expected_answer_summary: "orders-api-asg's flapping instance-replacement loop, caused by a 30-second HealthCheckGracePeriod that was too short for v3.6.0's new ~90-second startup time, drove rapid repeated RunInstances calls that eventually hit the EC2 API rate limit."
+  notes: ""
+
+- qid: "881c0819-13a8-45f3-946b-d50cb91799be"
+  question: "Which incident's Redis writes failed with `OOM command not allowed when used memory > 'maxmemory'.`?"
+  question_type: keyword
+  relevant_doc_ids: ["b61f30fb-81d0-4922-8041-8be5f4ad7eea"]
+  expected_answer_summary: "INC-2025-0501, when session-service v2.14.0 wrote session keys with no TTL and volatile-lru had no evictable keys left once sessions-redis-001 reached 99.7% of maxmemory."
+  notes: ""
+
+- qid: "7761240b-c285-412c-9b19-f3f6bda3f562"
+  question: "Why did clients see `READONLY You can't write against a read only replica.` during INC-2025-0502?"
+  question_type: keyword
+  relevant_doc_ids: ["7761f1cb-19bd-4cf3-b9c9-6548de597742"]
+  expected_answer_summary: "During orders-cache-prod's maintenance-window failover, some orders-service clients still had the old primary's IP cached (stale 30-second DNS TTL) and briefly attempted writes against it after it had become a read-only replica."
+  notes: ""
+
+- qid: "4335534b-cc34-442b-a3c7-5065c010fe46"
+  question: "Which incident's clients received the response body `{\"message\":\"Too Many Requests\"}`?"
+  question_type: keyword
+  relevant_doc_ids: ["e12951e9-da01-4b96-85a6-38805cc34f85"]
+  expected_answer_summary: "INC-2025-0601, when the Summer Rewards push notification drove traffic past API Gateway's account-level throttle (10,000 RPS steady-state, 5,000-request burst) in us-east-1, producing HTTP 429s."
+  notes: ""
+
+- qid: "4ffda5f2-724a-4b4b-9e03-c86aa7cda160"
+  question: "What caused the response body `{\"message\": \"Endpoint request timed out\"}` in INC-2025-0602?"
+  question_type: keyword
+  relevant_doc_ids: ["42c22167-17cf-49db-8a1e-4b1d8f2ba396"]
+  expected_answer_summary: "order-enrichment-svc's cold starts, with p99 init duration of 31,402 ms from package bloat plus provisioned concurrency dropping to 0, exceeded API Gateway's fixed, non-configurable 29-second integration timeout."
+  notes: ""
+
+- qid: "ac660496-681a-4094-877e-ab221e8678a1"
+  question: "Which incident's writes were rejected with `ProvisionedThroughputExceededException: The level of configured provisioned throughput for the table was exceeded. Consider increasing your provisioning level with the UpdateTable API.`?"
+  question_type: keyword
+  relevant_doc_ids: ["fca24f95-19cb-4418-908f-2b49974a6f9f"]
+  expected_answer_summary: "INC-2025-0701, when a 2.4 million-record batch import for tenant_00042 concentrated all writes on a single partition key and exceeded DynamoDB's 1,000 WCU per-partition ceiling."
+  notes: ""
+
+- qid: "f1ab5185-9950-482b-83af-1b12353b338c"
+  question: "What caused the checkout error body `Failed to retrieve order: ProvisionedThroughputExceededException` in INC-2025-0702?"
+  question_type: keyword
+  relevant_doc_ids: ["1d1168e0-5a88-4c52-ad00-03bec93ebd87"]
+  expected_answer_summary: "A misconfigured EventBridge schedule (rate(15 minutes) instead of rate(1 day)) ran full-table Scans against orders-prod roughly 96x more often than intended, exhausting the table's provisioned RCU and throttling unrelated checkout reads."
+  notes: ""
+
+- qid: "64bc2f3e-3d3f-4092-9dc8-eee8fec92c5f"
+  question: "Which incident produced the browser error `NET::ERR_CERT_DATE_INVALID`?"
+  question_type: keyword
+  relevant_doc_ids: ["5040b325-bf2f-4ffb-8f90-c1a89f69e831"]
+  expected_answer_summary: "INC-2025-0801, when the ACM certificate for www.acmecloudops.com expired because its DNS validation CNAME had been deleted from Route 53 63 days earlier, silently disabling auto-renewal."
+  notes: ""
+
+- qid: "3983eba2-afef-4f7b-ac08-43e97faf3738"
+  question: "What caused the ALB access-log error_reason `Target.FailedHealthChecks` in INC-2025-0802?"
+  question_type: keyword
+  relevant_doc_ids: ["4c51612d-46bc-42b1-a6f0-faa18404fd2a"]
+  expected_answer_summary: "prod-web-tg's targets flapped healthy and unhealthy every 90-150 seconds because JVM full-GC pauses of 700ms-1.2s, caused by an unchanged -Xmx1536m heap flag after the container memory limit was cut to 1024 MiB, occasionally pushed the DB-coupled /healthz check past its 5-second timeout."
+  notes: ""
+
+- qid: "9776b13f-657b-4798-b769-4264edeefbfb"
+  question: "Which incident's stopped tasks show `stoppedReason: \"OutOfMemoryError: Container killed due to memory usage\"` with exit code 137?"
+  question_type: keyword
+  relevant_doc_ids: ["0bf82776-629e-41c6-bcdc-cebf6d349e88"]
+  expected_answer_summary: "INC-2025-0901, after a pandas/numpy dependency upgrade raised metrics-ingestor-svc's per-task memory footprint from roughly 380 MB to roughly 640 MB, past the task definition's unchanged 512 MiB hard memory limit."
+  notes: ""
+
+- qid: "85196e74-301b-41f2-a112-eee8cf76f5e8"
+  question: "Which incident's ECS service events report that no subnet in the VPC had any available IP addresses?"
+  question_type: keyword
+  relevant_doc_ids: ["90e3ea03-4631-45d3-a7ee-349ab267ccba"]
+  expected_answer_summary: "INC-2025-0902, when Application Auto Scaling tried to scale prod-checkout-svc from 40 to 160 tasks but its two shared /26 subnets had only about 23 free IP addresses left combined."
+  notes: ""
+
+- qid: "bf3dbc37-8503-4590-991c-9485164ef6a9"
+  question: "What caused the errors `Error: connect ETIMEDOUT` and `Error: connect EADDRNOTAVAIL` during INC-2025-1001?"
+  question_type: keyword
+  relevant_doc_ids: ["61a6d661-a53d-4002-a8a9-96f1694f3726"]
+  expected_answer_summary: "payment-worker-asg's scale-out from 40 to 260 instances drove concurrent connections to the payment gateway's small set of fixed upstream IPs past the single NAT Gateway's 55,000-connections-per-destination limit, which silently drops new connection attempts instead of returning an explicit throttle error."
+  notes: ""
+
+- qid: "7079fe5d-b187-41b8-9dfc-b94f851d4b3b"
+  question: "Which incident failed with `InvalidParameterValueException: The role defined for the function cannot be assumed by Lambda.`?"
+  question_type: keyword
+  relevant_doc_ids: ["f0351ec8-1a0b-4015-b0c1-0a7842c9b185"]
+  expected_answer_summary: "INC-2025-1002, when a shared Terraform IAM-role module's v3.0.0 upgrade silently applied a default trust-policy template adding an sts:ExternalId condition that the lambda.amazonaws.com service principal can never satisfy."
+  notes: ""
+
+- qid: "7b722fcc-ba0d-4bc9-ae1f-91d943e39171"
+  question: "Why did a marketing push notification end up starving a Postgres database of available connections?"
+  question_type: semantic
+  relevant_doc_ids: ["ff1500b6-527b-442a-ba8e-6fc87c224de3"]
+  expected_answer_summary: "A 9x spike in traffic drove a Lambda function to 2,800 concurrent executions, and because it opened a fresh direct database connection per invocation with no pooling or concurrency cap, it consumed nearly all of the database's connection slots, locking out other services sharing that database."
+  notes: ""
+
+- qid: "32563833-0899-45a9-8ed0-d69e5a366a78"
+  question: "During an overnight data-loading job, why did storage autoscaling fail to keep write performance stable?"
+  question_type: semantic
+  relevant_doc_ids: ["f8c8d772-7708-4a36-aeb6-8ec48c00cc52"]
+  expected_answer_summary: "The instance's autoscaling setting only grows disk capacity as free space shrinks; it does not add provisioned IOPS headroom, so when the ETL job's write demand outgrew the fixed 3,000-IOPS baseline, throughput saturated and every additional write had to queue."
+  notes: ""
+
+- qid: "7ab5a993-4e1e-4ae3-a196-aaab89f57da3"
+  question: "What networking resource ran out of room and slowed down startup for a payments webhook handler?"
+  question_type: semantic
+  relevant_doc_ids: ["fe5019d4-a53d-4734-8d7d-be844151c3d7"]
+  expected_answer_summary: "The subnet shared by several VPC-attached Lambda functions ran out of available IP addresses after new deployments and a traffic burst, so new execution environments could not get network interfaces provisioned quickly, causing severe cold-start latency and some outright failures."
+  notes: ""
+
+- qid: "5625693b-2d51-49b2-9488-c319168d7694"
+  question: "Why could a notification function not draw on spare account-level capacity when demand suddenly rose?"
+  question_type: semantic
+  relevant_doc_ids: ["00d240fe-644d-450e-aa61-cb7d3c208ad5"]
+  expected_answer_summary: "Its concurrency had been permanently capped months earlier for cost reasons, and that kind of fixed reservation is enforced as a hard ceiling that cannot borrow from the account's otherwise-idle shared concurrency pool, even when that pool has plenty of room."
+  notes: ""
+
+- qid: "011db915-0ac4-4370-a84f-3a77de5148f6"
+  question: "How did an infrastructure-as-code refactor accidentally lock legitimate CDN traffic out of a storage bucket?"
+  question_type: semantic
+  relevant_doc_ids: ["ae15d9eb-da95-48a3-a12f-2833868ba966"]
+  expected_answer_summary: "A bucket-policy-generation change referenced an outdated data source during a merge, so the statement permitting the CDN's origin access identity to read objects was silently omitted, and the bucket defaulted to denying those requests."
+  notes: ""
+
+- qid: "196716ef-fe97-4097-8fb3-8654ebe72fbb"
+  question: "Why did shoppers on the West Coast see outdated prices and inventory after a large catalog update?"
+  question_type: semantic
+  relevant_doc_ids: ["cb8eac5b-9878-4251-8db9-82347b154dc3"]
+  expected_answer_summary: "A large overnight batch of catalog writes overwhelmed the encryption calls needed for cross-region replication, and the West Coast edge origin kept serving the older regional copy as authoritative instead of detecting the lag and falling back to the source region."
+  notes: ""
+
+- qid: "8e3ccd87-cfcf-4c17-8c13-f09e212b0d74"
+  question: "Why were in-progress checkout connections severed the instant a scale-in event removed server capacity?"
+  question_type: semantic
+  relevant_doc_ids: ["2317f2b0-e9df-4bb2-9a64-9e323dc17452"]
+  expected_answer_summary: "The load balancer's grace period for letting an outgoing server finish existing connections before removal had been left at zero, so terminated instances stopped serving mid-request instead of being allowed to finish pending work first."
+  notes: ""
+
+- qid: "faf880f7-2d1d-4fdb-acbc-d7f7be851e58"
+  question: "Why did a routine software release trigger an unending cycle of new servers being replaced right after they came up?"
+  question_type: semantic
+  relevant_doc_ids: ["81d319d3-40d3-4f43-8af1-2b4f69167ea5"]
+  expected_answer_summary: "The new release made application startup take much longer, but the scaling group's tolerance window for a new server to pass its first health check was not increased to match, so every replacement was judged unhealthy and swapped out before it finished starting, repeating indefinitely."
+  notes: ""
+
+- qid: "63156720-70bd-4cb9-990e-29de4614a210"
+  question: "Why did an in-memory cache run out of room even though it was supposed to automatically clear out old entries?"
+  question_type: semantic
+  relevant_doc_ids: ["b61f30fb-81d0-4922-8041-8be5f4ad7eea"]
+  expected_answer_summary: "A code change stopped attaching an expiration to newly written entries, and the cache's eviction policy only removes entries that carry an expiration, so those entries piled up permanently until there was no room left to write."
+  notes: ""
+
+- qid: "be0c8788-f753-4a1d-a0bf-00eb7f4ea0d8"
+  question: "Why did some database-cache write requests briefly fail during a routine patch window?"
+  question_type: semantic
+  relevant_doc_ids: ["7761f1cb-19bd-4cf3-b9c9-6548de597742"]
+  expected_answer_summary: "An automatic engine-version upgrade triggered a fast failover to a standby node, but the application's client had no retry-on-timeout logic and relied on a slow-to-expire cached DNS lookup to discover the new primary, so a handful of requests hit stale endpoints in that short gap."
+  notes: ""
+
+- qid: "6112d6bf-44c3-4200-8fc9-afa2ef29c8e1"
+  question: "How did a mass mobile notification blow past an API's traffic ceiling even though the team had warned about it in advance?"
+  question_type: semantic
+  relevant_doc_ids: ["e12951e9-da01-4b96-85a6-38805cc34f85"]
+  expected_answer_summary: "The account-wide rate limit for the region had been left at its default value, and even though the marketing team had shared a peak-traffic estimate exceeding that default days ahead of time, no capacity increase had been requested before the campaign went out."
+  notes: ""
+
+- qid: "3818fb0d-422b-4d42-9b29-093e7bb66bc8"
+  question: "How did two unrelated deployment mistakes combine into a widespread request-timeout problem?"
+  question_type: semantic
+  relevant_doc_ids: ["42c22167-17cf-49db-8a1e-4b1d8f2ba396"]
+  expected_answer_summary: "One change unintentionally pulled in a heavy library that dramatically slowed function startup, and a separate configuration omission reset a pre-warmed capacity setting to zero, so nearly every request had to endure the slow startup and exceeded the gateway's fixed wait limit."
+  notes: ""
+
+- qid: "e5c469a2-62dc-4153-b50f-ff5ef8192fd0"
+  question: "Why did a single customer's data-loading job get rate-limited even though the overall table had plenty of spare write capacity?"
+  question_type: semantic
+  relevant_doc_ids: ["fca24f95-19cb-4418-908f-2b49974a6f9f"]
+  expected_answer_summary: "Every record in the load shared the identical key value, so all of the writes landed on one internal storage partition, which carries its own fixed throughput ceiling that overall table-level capacity cannot override."
+  notes: ""
+
+- qid: "bb18ccde-8d15-4816-b0d3-bc2821e79f8c"
+  question: "Why did unrelated checkout reads slow to a crawl after a background job's schedule was mistyped?"
+  question_type: semantic
+  relevant_doc_ids: ["1d1168e0-5a88-4c52-ad00-03bec93ebd87"]
+  expected_answer_summary: "A reconciliation job meant to run once a day was instead firing every fifteen minutes, and because its lookups had no supporting index, each run scanned the entire table, repeatedly consuming most of the shared read capacity that other reads also needed."
+  notes: ""
+
+- qid: "24b67d63-9080-42c6-87b4-b12712ccb8d5"
+  question: "Why did a website's secure certificate lapse without anyone noticing in time?"
+  question_type: semantic
+  relevant_doc_ids: ["5040b325-bf2f-4ffb-8f90-c1a89f69e831"]
+  expected_answer_summary: "The DNS record the certificate authority used to confirm ongoing domain ownership had been removed months earlier during an unrelated cleanup, silently stopping automatic renewal, and the resulting failure notices were sent to an inbox nobody was monitoring."
+  notes: ""
+
+- qid: "d39569e4-cb7f-46e7-86a3-dbe2b2b3a2f1"
+  question: "How did shrinking a container's memory allowance end up taking an entire web tier offline intermittently?"
+  question_type: semantic
+  relevant_doc_ids: ["4c51612d-46bc-42b1-a6f0-faa18404fd2a"]
+  expected_answer_summary: "The container's memory ceiling was lowered without adjusting the application's internal heap setting, so garbage-collection pauses grew long enough to occasionally miss the load balancer's health-check window, and the resulting removal of capacity piled extra load onto the remaining servers, making the problem recur in waves."
+  notes: ""
+
+- qid: "8d1c274f-2d9e-4872-b053-e5d8ee9bcdef"
+  question: "Why did upgrading two common data-processing libraries cause containers to be killed repeatedly?"
+  question_type: semantic
+  relevant_doc_ids: ["0bf82776-629e-41c6-bcdc-cebf6d349e88"]
+  expected_answer_summary: "The new library versions substantially increased how much memory the service used at steady state, and because the container's fixed memory ceiling was not raised to match, the orchestrator's kernel began terminating the process every time it exceeded that limit."
+  notes: ""
+
+- qid: "b6ca6b1e-ab4b-41b4-a081-62c71b0f9048"
+  question: "Why did adding more containers to handle a demand surge not actually add much usable capacity?"
+  question_type: semantic
+  relevant_doc_ids: ["90e3ea03-4631-45d3-a7ee-349ab267ccba"]
+  expected_answer_summary: "The network subnets those containers needed addresses from were already nearly full from other shared services, so most of the newly requested containers could not get a network interface assigned and never actually started running."
+  notes: ""
+
+- qid: "8a7385cc-27da-4cbb-8107-96bfa36958cc"
+  question: "Why did outbound calls to a payment provider start failing silently after a large worker-fleet scale-up?"
+  question_type: semantic
+  relevant_doc_ids: ["61a6d661-a53d-4002-a8a9-96f1694f3726"]
+  expected_answer_summary: "Concentrating a much larger worker fleet's outbound connections through a single shared network gateway pushed concurrent connections to the payment provider's few IP addresses past that gateway's per-destination connection ceiling, and the gateway simply dropped the excess connections rather than signaling a clear error."
+  notes: ""
+
+- qid: "e8f83a84-1f1c-4571-9bc7-7d102bceca5f"
+  question: "How did upgrading a shared permissions module accidentally lock a scheduled job out of its own role?"
+  question_type: semantic
+  relevant_doc_ids: ["f0351ec8-1a0b-4015-b0c1-0a7842c9b185"]
+  expected_answer_summary: "The module's new version renamed one of its inputs without deprecating the old name, so the old value was quietly dropped and a template meant only for test fixtures was applied instead, adding a condition to the role's trust policy that the calling service can never fulfill."
+  notes: ""
+
+- qid: "1d0ced87-a311-4bc3-9f92-1546675be3af"
+  question: "How do the root causes of the two RDS incidents, INC-2025-0101 and INC-2025-0102, differ?"
+  question_type: cross_document
+  relevant_doc_ids: ["ff1500b6-527b-442a-ba8e-6fc87c224de3", "f8c8d772-7708-4a36-aeb6-8ec48c00cc52"]
+  expected_answer_summary: "INC-2025-0101 was a connection-count problem: unbounded Lambda concurrency opened unpooled connections that exhausted max_connections. INC-2025-0102 was a throughput problem: nightly ETL write volume outgrew provisioned IOPS, which storage-size autoscaling does nothing to compensate for since it governs volume size, not IOPS."
+  notes: ""
+
+- qid: "bc171bd1-a29c-46bf-8b44-45cee81f5ba9"
+  question: "What is the key difference between the two Lambda incidents, INC-2025-0201 and INC-2025-0202?"
+  question_type: cross_document
+  relevant_doc_ids: ["fe5019d4-a53d-4734-8d7d-be844151c3d7", "00d240fe-644d-450e-aa61-cb7d3c208ad5"]
+  expected_answer_summary: "INC-2025-0201 was a VPC networking failure: the subnet ran out of IP addresses for ENIs, causing cold-start latency and EniLimitExceededException. INC-2025-0202 was a concurrency-configuration failure: a stale fixed ReservedConcurrentExecutions ceiling of 50 could not absorb a launch spike, causing throttling and an SQS backlog."
+  notes: ""
+
+- qid: "5d2f119e-cc53-4e46-8105-b32a0a3bd41b"
+  question: "Compare the failure modes of the two S3 incidents, INC-2025-0301 and INC-2025-0302."
+  question_type: cross_document
+  relevant_doc_ids: ["ae15d9eb-da95-48a3-a12f-2833868ba966", "cb8eac5b-9878-4251-8db9-82347b154dc3"]
+  expected_answer_summary: "INC-2025-0301 was an access-control regression where a Terraform merge silently dropped a permission statement, producing immediate hard 403 errors. INC-2025-0302 was a replication-latency incident where a KMS throttling bottleneck delayed cross-region replication, producing stale but successful reads rather than errors."
+  notes: ""
+
+- qid: "a85405fa-542c-4826-8714-ce811d8aae7c"
+  question: "What do the two EC2 Auto Scaling incidents, INC-2025-0401 and INC-2025-0402, have in common, and how do they differ?"
+  question_type: cross_document
+  relevant_doc_ids: ["2317f2b0-e9df-4bb2-9a64-9e323dc17452", "81d319d3-40d3-4f43-8af1-2b4f69167ea5"]
+  expected_answer_summary: "Both stem from an ASG or ALB timing setting left at an inadequate default value. INC-2025-0401's zero-second deregistration delay dropped in-flight requests during a normal scale-in, while INC-2025-0402's too-short health-check grace period killed newly launched instances during a deploy, triggering a self-sustaining replacement loop rather than a one-time drop."
+  notes: ""
+
+- qid: "747baf3b-63fd-4bec-a9b6-f203d93e2c88"
+  question: "How did the two ElastiCache incidents, INC-2025-0501 and INC-2025-0502, differ in severity and trigger?"
+  question_type: cross_document
+  relevant_doc_ids: ["b61f30fb-81d0-4922-8041-8be5f4ad7eea", "7761f1cb-19bd-4cf3-b9c9-6548de597742"]
+  expected_answer_summary: "INC-2025-0501 was critical and self-inflicted: an application bug omitting TTLs caused sustained memory exhaustion and cascading DynamoDB throttling over 47 minutes. INC-2025-0502 was medium severity and AWS-initiated: a routine maintenance failover caused only a 42-second client-side write-error window due to missing retry logic."
+  notes: ""
+
+- qid: "8178eb6c-ccc7-4f89-a657-69d9df1c54d9"
+  question: "Contrast the two API Gateway incidents, INC-2025-0601 and INC-2025-0602."
+  question_type: cross_document
+  relevant_doc_ids: ["e12951e9-da01-4b96-85a6-38805cc34f85", "42c22167-17cf-49db-8a1e-4b1d8f2ba396"]
+  expected_answer_summary: "INC-2025-0601 was a rate-limit problem: traffic exceeded the account-level throttle ceiling, producing HTTP 429s. INC-2025-0602 was a backend-latency problem: Lambda cold starts after a deploy misconfiguration exceeded the fixed 29-second integration timeout, producing HTTP 504s."
+  notes: ""
+
+- qid: "597f785d-7819-4509-8484-23e65b5a1f88"
+  question: "How do the two DynamoDB incidents, INC-2025-0701 and INC-2025-0702, differ in what was overloaded?"
+  question_type: cross_document
+  relevant_doc_ids: ["fca24f95-19cb-4418-908f-2b49974a6f9f", "1d1168e0-5a88-4c52-ad00-03bec93ebd87"]
+  expected_answer_summary: "INC-2025-0701 hit a per-partition write-throughput ceiling because a batch import concentrated writes on one hot key. INC-2025-0702 exhausted table-level read capacity because two code paths used full-table Scans instead of an index-backed Query, worsened by a schedule bug running the job 96x too often."
+  notes: ""
+
+- qid: "d0d87b8a-3268-4cb8-93d1-b6578a421aed"
+  question: "What distinguishes the two CloudFront-related incidents, INC-2025-0801 and INC-2025-0802?"
+  question_type: cross_document
+  relevant_doc_ids: ["5040b325-bf2f-4ffb-8f90-c1a89f69e831", "4c51612d-46bc-42b1-a6f0-faa18404fd2a"]
+  expected_answer_summary: "INC-2025-0801 was a complete, sustained HTTPS outage caused by an expired, unrenewed ACM certificate. INC-2025-0802 was a partial, cyclical 5xx spike caused by ALB target-group health checks flapping from GC pauses after a container memory-limit reduction, unrelated to certificates."
+  notes: ""
+
+- qid: "2b27c762-1be0-4024-9cc0-b0a72cbdf6d7"
+  question: "How do the two ECS Fargate incidents, INC-2025-0901 and INC-2025-0902, differ in root cause?"
+  question_type: cross_document
+  relevant_doc_ids: ["0bf82776-629e-41c6-bcdc-cebf6d349e88", "90e3ea03-4631-45d3-a7ee-349ab267ccba"]
+  expected_answer_summary: "INC-2025-0901 was per-task memory exhaustion: a dependency upgrade raised memory footprint past the hard task memory limit, causing existing tasks to be OOMKilled. INC-2025-0902 was VPC IP-address exhaustion during scale-out: undersized subnets had no free addresses for new tasks' ENIs, capping added capacity rather than killing running tasks."
+  notes: ""
+
+# The 17 entries below cover the 5 real-world RCA docs added under
+# data/raw_rca_docs/real/ - four famous public postmortems (AWS S3 2017,
+# Cloudflare Nov 2023, GitLab DB 2017, Meta BGP 2021) plus one complete
+# Azure/Terraform example incident (INC-2026-0142). Same factual/keyword/
+# semantic split as above, plus two cross_document questions linking a real
+# incident to a thematically related synthetic one.
+
+- qid: "238e161b-d214-42ba-8854-959b1824223d"
+  question: "What was the root cause of the 2017 Amazon S3 outage tracked as INC-2017-0228-S3-USEAST1?"
+  question_type: factual
+  relevant_doc_ids: ["6a7f1666-ce66-4581-8b66-4e0e27ffa087"]
+  expected_answer_summary: "The maintenance tool used to remove servers from S3's index and placement subsystems had no lower-bound safeguard to validate the input against a minimum required capacity, so a single mistyped parameter removed far more server capacity than intended from both subsystems simultaneously."
+  notes: ""
+
+- qid: "c98fe40f-5372-4a22-adca-2a8ce1f9a1e0"
+  question: "Why did the AWS Service Health Dashboard fail to update during the February 28, 2017 S3 disruption?"
+  question_type: keyword
+  relevant_doc_ids: ["6a7f1666-ce66-4581-8b66-4e0e27ffa087"]
+  expected_answer_summary: "The Service Health Dashboard was itself hosted on S3 in the affected US-EAST-1 region, so when S3 failed the dashboard failed too; engineers switched to an alternate page and Twitter for status updates."
+  notes: ""
+
+- qid: "925a1694-fef2-4a72-be1e-03e4fe67212f"
+  question: "During this outage, why couldn't the public rely on Amazon's own official status page to learn what was going on?"
+  question_type: semantic
+  relevant_doc_ids: ["6a7f1666-ce66-4581-8b66-4e0e27ffa087"]
+  expected_answer_summary: "The status page depended on the very storage service that had failed, so it went down along with everything else, forcing the team to communicate through alternate channels."
+  notes: ""
+
+- qid: "7246a3d4-eb24-4c5e-95b1-e5f6ddd9e56a"
+  question: "What made Cloudflare's high-availability cluster fail to fully absorb the PDX-04 power outage in INC-2023-1102-CF-CONTROLPLANE?"
+  question_type: factual
+  relevant_doc_ids: ["38a80fbd-ef61-426f-ae6e-a19cf9834cf3"]
+  expected_answer_summary: "The Kafka and ClickHouse logging/analytics cluster had an undisclosed, single-facility dependency on PDX-04 that was never tested, so the two healthy core data centers could not take over that workload even though the HA design intended active-active redundancy."
+  notes: ""
+
+- qid: "3f8617b3-ff1b-404c-b539-6d97e11430ba"
+  question: "How long were Cloudflare's UPS batteries at PDX-04 rated to last, and how long did they actually last before failing?"
+  question_type: keyword
+  relevant_doc_ids: ["38a80fbd-ef61-426f-ae6e-a19cf9834cf3"]
+  expected_answer_summary: "The UPS batteries were rated for about 10 minutes of runtime but began failing after only about 4 minutes."
+  notes: ""
+
+- qid: "5abfa4ee-6b72-48d2-9665-dc2149d89a79"
+  question: "Why wasn't Cloudflare told sooner that its data center had switched to backup power?"
+  question_type: semantic
+  relevant_doc_ids: ["38a80fbd-ef61-426f-ae6e-a19cf9834cf3"]
+  expected_answer_summary: "Flexential, the facility operator, did not proactively notify Cloudflare when it failed over to generator power, removing an early warning window Cloudflare could have used to move workloads out preemptively."
+  notes: ""
+
+- qid: "2c1d39b3-d96b-4bd8-8b53-68780ef65066"
+  question: "What was the only usable recovery point after the accidental primary database deletion in INC-2017-0131-GITLAB-DB?"
+  question_type: factual
+  relevant_doc_ids: ["ed1935ec-3970-43d0-b67d-75f7189b9b87"]
+  expected_answer_summary: "A manually created LVM snapshot taken about six hours before the deletion, at approximately 17:20 UTC, was the only usable restore point, since the secondary, the pg_dump backups, and database disk snapshots were all unavailable or broken."
+  notes: ""
+
+- qid: "a27699af-c9c7-4368-8649-74d3e45bbbc1"
+  question: "What PostgreSQL client version mismatch caused GitLab's pg_dump backups to silently fail before the January 2017 database incident?"
+  question_type: keyword
+  relevant_doc_ids: ["ed1935ec-3970-43d0-b67d-75f7189b9b87"]
+  expected_answer_summary: "The pg_dump backup process was using PostgreSQL 9.2 client tooling against a PostgreSQL 9.6 production server, an incompatible version pairing that caused the backups to fail without being detected."
+  notes: ""
+
+- qid: "73632ca8-31ad-4fee-836d-1abea0688f77"
+  question: "Why did nobody notice that GitLab's database backups weren't actually working before they were needed?"
+  question_type: semantic
+  relevant_doc_ids: ["ed1935ec-3970-43d0-b67d-75f7189b9b87"]
+  expected_answer_summary: "There was no independent monitoring of backup success, and the failure-notification emails that should have flagged the problem were being rejected, so the backup failures went undetected until an actual recovery was attempted."
+  notes: ""
+
+- qid: "1cf56091-4593-48ee-a64a-9ae5ce047312"
+  question: "Why did Facebook's own DNS servers make the October 2021 outage worse, per INC-2021-1004-META-BGP?"
+  question_type: factual
+  relevant_doc_ids: ["06fa99fa-ce29-4289-a8b0-3768ea4677bc"]
+  expected_answer_summary: "Facebook's DNS servers are designed to automatically withdraw their own BGP route advertisements when they can't reach Facebook's data centers as a safety mechanism; once the entire backbone went down, every DNS server withdrew its routes simultaneously, making the domains globally unresolvable rather than just internally unreachable."
+  notes: ""
+
+- qid: "241cf36f-b09a-4627-8d1e-9e06136e1af0"
+  question: "What specifically prevented Meta's internal audit tool from blocking the backbone command that caused the October 2021 outage?"
+  question_type: keyword
+  relevant_doc_ids: ["06fa99fa-ce29-4289-a8b0-3768ea4677bc"]
+  expected_answer_summary: "The internal audit tool was specifically designed to catch and block exactly this kind of overly broad, high-impact command, but it contained a bug that let the command through instead of stopping it."
+  notes: ""
+
+- qid: "2ab4e984-e3ec-4029-8bb9-b9d6bc653205"
+  question: "Why couldn't engineers just log in remotely and undo the change once they knew what had gone wrong?"
+  question_type: semantic
+  relevant_doc_ids: ["06fa99fa-ce29-4289-a8b0-3768ea4677bc"]
+  expected_answer_summary: "The same network outage had also taken down Facebook's internal tools, communications systems, and remote access, and even some physical badge readers, so engineers had to travel physically to data centers to fix the hardware on-site."
+  notes: ""
+
+- qid: "75e57c78-f5cf-4e38-a55e-0662415fd6a1"
+  question: "What was the root cause of INC-2026-0142, the Terraform drift-remediation incident on prod-vnet?"
+  question_type: factual
+  relevant_doc_ids: ["f296bb79-05c7-4140-85c2-da97b5942a4d"]
+  expected_answer_summary: "An engineer had manually changed the subnet's CIDR in the Azure Portal two weeks earlier without updating Terraform state, creating drift; when the nightly drift-remediation job ran, Terraform could not update the CIDR in place and instead destroyed and recreated the subnet, which detached its NSGs."
+  notes: ""
+
+- qid: "926ab845-e324-45f9-a323-ff33c8e241b6"
+  question: "Which Azure CLI command did the on-call SRE use to re-attach the detached NSGs in INC-2026-0142?"
+  question_type: keyword
+  relevant_doc_ids: ["f296bb79-05c7-4140-85c2-da97b5942a4d"]
+  expected_answer_summary: "az network vnet subnet update, specifying the resource group, vnet name, subnet name, and --network-security-group prod-nsg-payments."
+  notes: ""
+
+- qid: "8161bc88-3836-48a7-bc5e-75cb181169d6"
+  question: "What governance gap allowed an out-of-band manual change to silently cause an outage weeks later?"
+  question_type: semantic
+  relevant_doc_ids: ["f296bb79-05c7-4140-85c2-da97b5942a4d"]
+  expected_answer_summary: "There was no policy gate blocking manual out-of-band changes made directly in the cloud portal, and no drift-detection alerting to surface the mismatch before the automated remediation job applied a destructive fix unattended."
+  notes: ""
+
+- qid: "24e2b268-f536-48b1-86e4-d7c522778f80"
+  question: "How does the root cause of the 2017 GitLab database data-loss incident differ from the root cause of the synthetic RDS connection pool exhaustion incident, INC-2025-0101?"
+  question_type: cross_document
+  relevant_doc_ids: ["ed1935ec-3970-43d0-b67d-75f7189b9b87", "ff1500b6-527b-442a-ba8e-6fc87c224de3"]
+  expected_answer_summary: "The GitLab incident was caused by a human operator error (a destructive command run against the wrong host) compounded by multiple simultaneously-broken backup/recovery safety nets, resulting in permanent data loss. The RDS incident was caused by an application-level design gap (no connection pooling and no concurrency ceiling) that let normal traffic growth exhaust the database's connection limit, with no data loss, only temporary unavailability."
+  notes: ""
+
+- qid: "85513e88-4cb5-442f-a751-68e649fb7a45"
+  question: "Compare the 2017 Amazon S3 outage to the synthetic S3 incidents INC-2025-0301 and INC-2025-0302 - what type of failure trigger do all three share?"
+  question_type: cross_document
+  relevant_doc_ids: ["6a7f1666-ce66-4581-8b66-4e0e27ffa087", "ae15d9eb-da95-48a3-a12f-2833868ba966", "cb8eac5b-9878-4251-8db9-82347b154dc3"]
+  expected_answer_summary: "All three were triggered by an operational or configuration change rather than a hardware failure or external attack: the 2017 outage by a mistyped maintenance-command parameter with no capacity safeguard, INC-2025-0301 by an IaC bucket-policy regression, and INC-2025-0302 by KMS throttling during cross-region replication - each a case of an internal change or limit tripping up normal operation rather than an external cause."
+  notes: ""

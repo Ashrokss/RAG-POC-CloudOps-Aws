@@ -1,0 +1,35 @@
+# Trimmed for the Streamlit-only Azure App Service deployment (F1 free tier -
+# 1GB storage total). Excludes what streamlit_app.py's import chain never
+# reaches when LLM_PROVIDER=azure: boto3/botocore/langchain-aws (Bedrock is a
+# lazy import inside rag/llm/bedrock_llm.py, rag/embeddings/bedrock_embeddings.py,
+# and rag/retrieval/rerank.py's bedrock_cohere branch - none of which execute
+# on the azure code path), pytest/pytest-mock (tests aren't shipped), and
+# typer/fastapi/uvicorn/tabulate (cli/, api/, and eval/report.py aren't
+# imported by streamlit_app.py). See requirements.txt at the repo root for the
+# full dependency set used by the CLI/API/tests.
+
+langchain>=1.0.0
+langchain-core>=1.0.0
+langchain-classic>=1.0.0
+langchain-community>=0.4.0
+langchain-chroma>=0.2.0
+
+chromadb>=0.5.0
+rank_bm25>=0.2.2
+# Azure App Service's Debian bullseye base image ships a system sqlite3 older
+# than chromadb's 3.35.0 minimum - rag/vectorstore/chroma_store.py swaps this
+# in before chromadb is ever imported. No-op locally (Windows/macOS already
+# have a new-enough sqlite3, and this wheel is Linux-only anyway).
+pysqlite3-binary>=0.5.0; sys_platform == "linux"
+
+azure-ai-inference>=1.0.0b4
+azure-core>=1.30.0
+
+streamlit>=1.38.0
+
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.1
+
+python-frontmatter>=1.1.0
+PyYAML>=6.0.2
