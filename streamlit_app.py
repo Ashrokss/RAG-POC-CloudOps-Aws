@@ -123,6 +123,12 @@ if st.button("Ask", type="primary", disabled=not question.strip()):
                 "(every incident matching the services named, with date, severity, "
                 "detection gap, duration and cost) alongside the retrieved chunks."
             )
+        elif route == "blast_radius":
+            st.caption(
+                "Blast-radius route - the model was given the okf/services/ dependency "
+                "graph's downstream impact for the service(s) named, alongside whatever "
+                "the chosen strategy retrieved for them."
+            )
 
         st.write(_escape_markdown_math(answer))
 

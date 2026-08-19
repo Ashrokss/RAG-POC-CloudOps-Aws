@@ -46,6 +46,7 @@ from rag.ingestion.loader import CORPUS_DIRS, load_rca_documents
 from rag.llm.factory import get_chat_model
 from rag.models import Citation, RAGAnswer
 from rag.retrieval.factory import get_retriever
+from rag.routing.dependency_graph import downstream_of, render_impact, reset_dependency_graph
 from rag.routing.incident_table import filter_rows, incident_rows, render_rows, reset_incident_table
 from rag.routing.router import classify, question_services
 from rag.vectorstore.chroma_store import get_vectorstore
@@ -83,8 +84,8 @@ def _corpus_chunks() -> list[Document]:
 def _cached_retriever(strategy: str, k: int) -> BaseRetriever:
     # (strategy, k) is the retriever's whole identity: the vector store handle
     # and the chunk list behind it are fixed for the process's lifetime, and
-    # rebuilding BM25 from 233 chunks per call was pure waste - an 86-question
-    # eval across 4 strategies paid for it 344 times.
+    # rebuilding BM25 from 233 chunks per call was pure waste - an 88-question
+    # eval across 4 strategies paid for it 352 times.
     return get_retriever(strategy, get_vectorstore(get_embeddings()), _corpus_chunks(), k)
 
 
@@ -100,6 +101,7 @@ def reset_corpus_cache() -> None:
         if clear is not None:
             clear()
     reset_incident_table()
+    reset_dependency_graph()
 
 
 def retrieve_only(question: str, strategy: str, k: int) -> list[Document]:
@@ -162,6 +164,21 @@ def aggregate_context(question: str, docs: list[Document]) -> tuple[str, list[Do
     return index_block, docs + _supporting_chunks(rows, docs)
 
 
+def blast_radius_context(question: str) -> str:
+    """The '### DEPENDENCY IMPACT ###' block: which services would be
+    affected, directly or transitively, if each service named in the
+    question failed - from okf/services/*.md's depends_on graph, not from
+    any incident. Unlike aggregate_context, this never widens docs: the
+    graph is a structural fact about the architecture, not a claim that
+    needs incident chunk text to back it - whatever the chosen strategy
+    already retrieved for the named service(s) is left as-is."""
+    origins = question_services(question)
+    if not origins:
+        return ""
+    impact = {origin: downstream_of(origin) for origin in origins}
+    return "### DEPENDENCY IMPACT ###\n" + render_impact(impact)
+
+
 def retrieve_for_question(question: str, strategy: str, k: int) -> tuple[list[Document], str, str]:
     """(docs, index_block, route) - the whole pre-generation half of answering.
     The eval harness calls this rather than re-deriving the route itself, so a
@@ -171,6 +188,13 @@ def retrieve_for_question(question: str, strategy: str, k: int) -> tuple[list[Do
     index_block = ""
     if route == "aggregate":
         index_block, docs = aggregate_context(question, docs)
+    elif route == "blast_radius":
+        index_block = blast_radius_context(question)
+        if not index_block:
+            # No named service to compute a dependency graph against - the
+            # same graceful downgrade _AGGREGATE_RE's over-triggering already
+            # relies on, rather than shipping an empty DEPENDENCY IMPACT block.
+            route = "retrieval"
     return docs, index_block, route
 
 

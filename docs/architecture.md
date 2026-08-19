@@ -61,27 +61,43 @@ interface, never to `chromadb` directly. See `docs/open-questions.md` for why - 
 DynamoDB migration path in one paragraph.
 
 
-## Two routes, one answer path
+## Three routes, one answer path
 
 `rag/routing/router.py` classifies each question before retrieval runs. Questions asking
 to count, rank, enumerate or total ("how many", "list every", "longest", "total") take the
-**aggregate** route; everything else takes the ordinary **retrieval** route. The split
-exists because top-k retrieval is structurally incapable of the first kind: the model only
-ever sees k chunks, so "which incident had the longest detection gap" cannot be answered
-correctly by a better reranker, only by looking at every incident.
+**aggregate** route; questions asking about dependency/failure propagation ("depends on",
+"breaks if", "blast radius") take the **blast_radius** route; everything else takes the
+ordinary **retrieval** route. The first split exists because top-k retrieval is
+structurally incapable of the aggregate kind: the model only ever sees k chunks, so "which
+incident had the longest detection gap" cannot be answered correctly by a better reranker,
+only by looking at every incident. The second exists because "what else breaks if RDS is
+down" has no answer in the incident corpus at all - it is a fact about the architecture,
+declared in `okf/services/*.md`, not a fact any RCA records.
 
 The aggregate route builds the incident index (`rag/routing/incident_table.py`) - one row
 per document with date, severity, services, status, and the three hand-extracted fields
 `detection_gap_minutes`, `duration_minutes`, `cost_usd` - filters it by any service the
 question named, and hands the model those rows *plus* chunk text for each listed incident,
 so an enumerated answer can still cite real excerpts rather than assert from metadata.
+
+The blast_radius route builds a dependency-impact block (`rag/routing/dependency_graph.py`)
+by inverting `okf/services/*.md`'s `depends_on` field and walking it breadth-first from the
+service(s) the question named, so a transitive dependent (e.g. Step Functions, two hops from
+RDS through Glue) is reported alongside a direct one. Unlike the aggregate route it does not
+widen the retrieved chunks - the answer is structural, not an incident claim, so the prompt
+is told to state it without an `[<incident id> · <section>]` tag unless an actual incident
+in the retrieved context backs it. `retrieve_for_question` downgrades this route back to
+plain retrieval if the question names no service the graph can be walked from, the same
+graceful-over-trigger tolerance the aggregate route already relies on.
+
 `RAGAnswer.route` records which path ran; the Streamlit console and the eval records both
 surface it.
 
 Classification is a regex, not an LLM call: the trigger vocabulary is small and closed, and
 a model round-trip to decide the route would add a second failure mode to a decision that
-does not need one. Over-triggering is the cheap direction - the aggregate route still runs
-normal retrieval and still cites chunk text, it just also hands over the index.
+does not need one. Over-triggering is the cheap direction - the aggregate and blast_radius
+routes still run normal retrieval and still cite chunk text, they just also hand over the
+index or the dependency block.
 
 ## The concept layer (`okf/`)
 
@@ -97,6 +113,10 @@ above had to wait for it. An unrecognised service name is a warning naming the `
 that would fix it, never an exception: the curated layer is expected to lag the corpus, and
 an ingest that refuses to run until someone writes a concept file is an ingest nobody runs.
 
-The failure-mode files these link to (`okf/failure-modes/*.md`), the playbook layer and the
-dependency graph are deliberately not built yet - the service files are the ones the
-routing layer actually consumes today.
+The failure-mode files these link to (`okf/failure-modes/*.md`, one per failure mode, each
+grounded in the incidents that exhibit it) and the playbook layer (`okf/playbooks/*.md`, one
+remediation runbook per failure mode) are now built, cross-linked service -> failure-mode ->
+playbook in both directions. The dependency graph (`depends_on`) is also now consumed, by
+the blast_radius route above rather than by ingestion - unlike `aliases`, which ingestion
+needs for every document, `depends_on` is read only when a question actually asks a
+dependency question.

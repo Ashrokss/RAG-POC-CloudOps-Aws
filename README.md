@@ -59,7 +59,7 @@ Citations (1):
   the database's hard limit. The push notification was the trigger, not the root cause;
 ```
 
-`eval run` scores two question sets in one invocation and reports them separately: the 86 golden
+`eval run` scores two question sets in one invocation and reports them separately: the 88 golden
 questions (`data/golden_qa/golden_qa.yaml`, scored on retrieval metrics plus token overlap) and the
 13 adversarial ones (`data/golden_qa/adversarial_qa.yaml`, scored on refusal correctness, required
 incident-id recall, forbidden-id leakage and grounding violations). It writes
@@ -68,7 +68,7 @@ adversarial`.
 
 The adversarial set exists because the golden set contains zero unanswerable questions, zero
 aggregates and zero refusal traps - a system that never refuses and never counts scores well on all
-86. Its scoring catches things token overlap cannot: a right incident with a wrong date, or the
+88. Its scoring catches things token overlap cannot: a right incident with a wrong date, or the
 same cost figure counted twice into a total that appears nowhere in the corpus (`eval/grounding.py`).
 
 Questions asking to count, rank, enumerate or total are routed off the vector index entirely
@@ -76,8 +76,10 @@ Questions asking to count, rank, enumerate or total are routed off the vector in
 detection gap" is not something a better reranker fixes. The aggregate route hands the model the
 complete incident index - every incident (or every one matching the services the question named),
 with date, severity, status, detection gap, duration and cost - alongside retrieved chunk text, so
-the answer is still citable. `RAGAnswer.route` records which path ran, and the Streamlit console
-shows it. In mock mode, the `keyword`
+the answer is still citable. A third route, blast_radius, answers "what else breaks if X is down"
+by walking the `depends_on` graph curated in `okf/services/*.md` - a question the incident corpus
+itself has no answer to, since it is a fact about the architecture, not about a past incident.
+`RAGAnswer.route` records which path ran, and the Streamlit console shows it. In mock mode, the `keyword`
 strategy gets a perfect MRR (1.000) on `keyword`-type questions - the expected signal that
 validates the harness logic before real credentials exist (see `docs/architecture.md`). Mock-mode
 quality scores run low because `MockChatModel` quotes retrieved text verbatim rather than

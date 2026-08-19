@@ -616,3 +616,17 @@
   relevant_doc_ids: ["6a7f1666-ce66-4581-8b66-4e0e27ffa087", "ae15d9eb-da95-48a3-a12f-2833868ba966", "cb8eac5b-9878-4251-8db9-82347b154dc3"]
   expected_answer_summary: "All three were triggered by an operational or configuration change rather than a hardware failure or external attack: the 2017 outage by a mistyped maintenance-command parameter with no capacity safeguard, INC-2025-0301 by an IaC bucket-policy regression, and INC-2025-0302 by KMS throttling during cross-region replication - each a case of an internal change or limit tripping up normal operation rather than an external cause."
   notes: ""
+
+- qid: "6e31d0f0-146d-4723-9e4e-7a1199503fd0"
+  question: "What services would be affected if RDS became unavailable, based on the documented service dependencies?"
+  question_type: blast_radius
+  relevant_doc_ids: ["ff1500b6-527b-442a-ba8e-6fc87c224de3", "f8c8d772-7708-4a36-aeb6-8ec48c00cc52"]
+  expected_answer_summary: "Per the curated okf/services/ dependency graph, AWS Glue depends directly on RDS, and Step Functions depends on Glue - so both Glue and Step Functions would be affected downstream if RDS became unavailable."
+  notes: "Exercises the blast_radius route (rag/routing/dependency_graph.py) rather than the incident corpus - the answer is a structural fact from okf/services/*.md's depends_on field, not something any single RCA states."
+
+- qid: "57218063-23b8-4f40-8e00-e597652ed57c"
+  question: "What would be affected downstream if the ACM certificate service had an outage?"
+  question_type: blast_radius
+  relevant_doc_ids: ["5040b325-bf2f-4ffb-8f90-c1a89f69e831"]
+  expected_answer_summary: "Per the curated okf/services/ dependency graph, ALB and CloudFront depend directly on ACM, and ECS and Route 53 depend on it transitively (through ALB and CloudFront) - so all four would be affected downstream if ACM had an outage."
+  notes: "Exercises the blast_radius route's transitive closure, not just direct dependents - ECS and Route 53 are two hops from ACM, not one."

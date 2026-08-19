@@ -16,6 +16,18 @@ Service filtering reuses the okf/services alias map, so "every Lambda
 incident" filters on the canonical id that ingestion already normalised the
 frontmatter to - which is exactly why the controlled vocabulary had to land
 before this did.
+
+blast_radius is a third, later addition answering a question neither of the
+above two can: "what else breaks if X is down" needs the depends_on graph
+curated in okf/services/*.md, not incident text or an incident-level index.
+It is checked before _AGGREGATE_RE - "what depends on RDS" would otherwise
+never fire the aggregate regex anyway, but "list everything that depends on
+RDS" contains both "list every..." and "depends on", and the dependency
+graph (not the incident index) is the actually-correct source for that
+question. blast_radius is a hint, not a commitment: retrieve_for_question
+downgrades it back to retrieval if question_services() cannot resolve a
+service to compute the graph against, the same "over-trigger is cheap"
+tolerance _AGGREGATE_RE already relies on.
 """
 
 from __future__ import annotations
@@ -25,7 +37,13 @@ from typing import Literal
 
 from rag.ingestion.loader import service_alias_map
 
-Route = Literal["retrieval", "aggregate"]
+Route = Literal["retrieval", "aggregate", "blast_radius"]
+
+_BLAST_RADIUS_RE = re.compile(
+    r"\b(depends? on|dependent on|dependenc(?:y|ies) of|relies? on|reliant on|"
+    r"downstream of|downstream impact|blast radius|breaks? if|fails? if|affected if)\b",
+    re.IGNORECASE,
+)
 
 # "between X and Y" was in the first draft of this list and is gone on
 # evidence: it caught no adversarial question that "longest"/"every" did not
@@ -40,6 +58,8 @@ _AGGREGATE_RE = re.compile(
 
 
 def classify(question: str) -> Route:
+    if _BLAST_RADIUS_RE.search(question):
+        return "blast_radius"
     return "aggregate" if _AGGREGATE_RE.search(question) else "retrieval"
 
 

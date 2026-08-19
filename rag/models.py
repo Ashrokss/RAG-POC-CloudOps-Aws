@@ -84,8 +84,9 @@ class RAGAnswer(BaseModel):
     mode: Literal["mock", "live"]
     # Which path produced this answer. Surfaced (not internal) because a
     # reviewer reading an enumeration or a total has to be able to see whether
-    # it came from the complete incident index or from k retrieved chunks.
-    route: Literal["retrieval", "aggregate"] = "retrieval"
+    # it came from the complete incident index, the okf/ dependency graph, or
+    # k retrieved chunks.
+    route: Literal["retrieval", "aggregate", "blast_radius"] = "retrieval"
     run_id: str = Field(default_factory=_new_uuid4)
     generated_at: datetime = Field(default_factory=_utc_now)
 
@@ -99,7 +100,7 @@ class GoldenQuestion(BaseModel):
     qid: str = Field(default_factory=_new_uuid4)
     question: str
     question_type: Literal[
-        "factual", "keyword", "semantic", "cross_document", "aggregate", "unanswerable"
+        "factual", "keyword", "semantic", "cross_document", "aggregate", "unanswerable", "blast_radius"
     ]
     # Optional so an adversarial entry can be authored without hand-copying
     # doc-id UUIDs: must_mention_ids carries incident ids, which the eval
@@ -110,7 +111,7 @@ class GoldenQuestion(BaseModel):
     notes: str = ""
 
     # Adversarial scoring fields. All three default to the inert value, so the
-    # existing 86-question golden file loads unchanged and is still scored by
+    # existing 88-question golden file loads unchanged and is still scored by
     # the Jaccard judge; a question that sets any of them is scored on these
     # instead. Ids here are incident ids (INC-YYYY-NNNN), not doc ids - that is
     # what a human writing a trap question actually knows.

@@ -18,11 +18,13 @@ generation or defaulting logic beyond the plain default value.
 
 Question sets are a mapping of label -> questions, not one flat list, because
 the golden set and the adversarial set are scored by different judges and
-must never be averaged together: the golden set's 86 questions all have an
-answer sitting in one retrievable chunk, so pooling them with 13 questions
-designed to be unanswerable, corpus-wide or arithmetic would let a strong
-score on the easy set hide a total failure on the hard one. Every record
-carries its set label and the reports break out one table per set.
+must never be averaged together: the golden set's 88 questions are answerable
+from one retrievable chunk (86) or the okf/ dependency graph via the
+blast_radius route (2) - never designed to be unanswerable - so pooling them
+with 13 questions designed to be unanswerable, corpus-wide or arithmetic
+would let a strong score on the easy set hide a total failure on the hard
+one. Every record carries its set label and the reports break out one table
+per set.
 
 Retrieval goes through rag_chain.retrieve_for_question rather than
 retrieve_only, so a scored run takes the same route (retrieval or aggregate)

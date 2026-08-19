@@ -67,6 +67,22 @@ def service_alias_map() -> dict[str, str]:
     return mapping
 
 
+@lru_cache(maxsize=1)
+def service_dependency_graph() -> dict[str, list[str]]:
+    """canonical service id -> the canonical ids it depends_on, from
+    okf/services/*.md. Values are already canonical (each file's own
+    depends_on entries are written as other files' ids, not free-text service
+    names), so this needs no alias resolution the way canonical_service()
+    does."""
+    graph: dict[str, list[str]] = {}
+    for path in sorted(_OKF_SERVICES_DIR.glob("*.md")):
+        metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+        service_id = str(metadata.get("id") or path.stem)
+        depends_on = metadata.get("depends_on") or []
+        graph[service_id] = [dep for dep in depends_on if isinstance(dep, str)]
+    return graph
+
+
 def canonical_service(name: str) -> str:
     """Canonical id for a free-text service name; the name unchanged (plus a
     one-time warning) when no okf/services file claims it."""

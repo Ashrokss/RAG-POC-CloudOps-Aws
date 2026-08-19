@@ -15,6 +15,7 @@ from langchain_core.documents import Document
 import rag.chain.rag_chain as rag_chain_module
 from config.settings import get_settings
 from rag.chain.rag_chain import retrieve_for_question
+from rag.routing.dependency_graph import downstream_of, render_impact
 from rag.routing.incident_table import filter_rows, incident_rows, render_rows
 from rag.routing.router import classify, question_services
 from rag.vectorstore.chroma_store import build_index
@@ -32,6 +33,13 @@ _RETRIEVAL_QUESTIONS = [
     "Why was notification-dispatcher throttled during the launch spike?",
 ]
 
+_BLAST_RADIUS_QUESTIONS = [
+    "What services depend on RDS?",
+    "What else breaks if IAM has an outage?",
+    "What would be affected if ACM went down?",
+    "What's the blast radius of an S3 failure?",
+]
+
 
 @pytest.mark.parametrize("question", _AGGREGATE_QUESTIONS)
 def test_aggregate_questions_route_to_the_index(question: str) -> None:
@@ -41,6 +49,56 @@ def test_aggregate_questions_route_to_the_index(question: str) -> None:
 @pytest.mark.parametrize("question", _RETRIEVAL_QUESTIONS)
 def test_ordinary_questions_still_route_to_retrieval(question: str) -> None:
     assert classify(question) == "retrieval"
+
+
+@pytest.mark.parametrize("question", _BLAST_RADIUS_QUESTIONS)
+def test_blast_radius_questions_route_to_the_dependency_graph(question: str) -> None:
+    assert classify(question) == "blast_radius"
+
+
+def test_downstream_of_walks_the_okf_services_depends_on_graph() -> None:
+    # Direct (glue depends_on rds) plus transitive (step-functions depends_on
+    # glue) - the whole reason downstream_of exists rather than a one-hop
+    # reverse lookup.
+    assert set(downstream_of("rds")) == {"glue", "step-functions"}
+
+
+def test_downstream_of_is_a_real_answer_not_zero_for_no_recorded_dependents() -> None:
+    # Nothing in okf/services/*.md declares sqs in its own depends_on - a
+    # legitimate "none recorded", not a bug, per canonical_service's same
+    # "the curated layer is expected to lag" tolerance.
+    assert downstream_of("sqs") == []
+    assert downstream_of("not-a-real-service-id") == []
+
+
+def test_render_impact_marks_no_dependents_as_recorded_not_absent() -> None:
+    rendered = render_impact({"sqs": downstream_of("sqs")})
+    assert "none recorded" in rendered
+
+    rendered = render_impact({"rds": downstream_of("rds")})
+    assert "glue" in rendered and "step-functions" in rendered
+
+
+def test_blast_radius_route_downgrades_to_retrieval_with_no_named_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sample_chunks: list[Document]
+) -> None:
+    # "breaks if" matches _BLAST_RADIUS_RE, but "the coffee machine" resolves
+    # to no okf/services/*.md id - retrieve_for_question must not ship an
+    # empty DEPENDENCY IMPACT block, the same over-trigger tolerance
+    # _AGGREGATE_RE already relies on.
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", "routing_blast_radius_downgrade_test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(rag_chain_module, "_corpus_chunks", lambda: sample_chunks)
+    build_index(sample_chunks, reset=True)
+
+    question = "What else breaks if the coffee machine goes down?"
+    assert classify(question) == "blast_radius"
+
+    docs, index_block, route = retrieve_for_question(question, "hybrid", k=3)
+
+    assert route == "retrieval"
+    assert index_block == ""
 
 
 def test_question_services_uses_the_okf_alias_map() -> None:
@@ -92,6 +150,26 @@ def test_aggregate_route_hands_over_every_matching_incident(
     # enumerated row can be cited rather than asserted from metadata alone.
     assert listed <= covered
     assert all(incident_id in index_block for incident_id in listed)
+
+
+def test_blast_radius_route_reports_the_dependency_impact_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", "routing_blast_radius_test")
+    get_settings.cache_clear()
+    build_index(list(rag_chain_module._corpus_chunks()), reset=True)
+
+    question = "What services depend on RDS, directly or transitively?"
+    docs, index_block, route = retrieve_for_question(question, "hybrid", k=5)
+
+    assert route == "blast_radius"
+    assert "### DEPENDENCY IMPACT ###" in index_block
+    assert "rds" in index_block
+    assert "glue" in index_block and "step-functions" in index_block
+    # No incident-index widening for this route - whatever the strategy
+    # retrieved for "RDS" is left as-is, unlike aggregate_context.
+    assert len(docs) <= 5
 
 
 def test_retrieval_route_adds_no_index_block(

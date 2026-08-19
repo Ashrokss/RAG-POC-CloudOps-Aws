@@ -7,7 +7,7 @@ Best-strategy-per-question-type section a CSV has no natural place to put.
 
 One section per question set, never a pooled table: the adversarial set is
 scored on refusal, required-id recall and grounding, the golden set on token
-overlap, and a single averaged row over both would let 86 easy questions bury
+overlap, and a single averaged row over both would let 88 easy questions bury
 13 hard ones. The adversarial section carries its own columns for exactly
 that reason - a strategy that answers everything and refuses nothing shows up
 as a 0.000 refusal column, not as a slightly lower quality score.

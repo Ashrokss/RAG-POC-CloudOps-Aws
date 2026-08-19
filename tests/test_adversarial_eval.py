@@ -1,8 +1,9 @@
 """
 Covers the adversarial scoring path end to end: the schema still loads the
-untouched 86-question golden file, the new optional fields default to inert
-values, and each adversarial sub-score fails the answer it is supposed to
-fail. The judge is exercised on hand-written answers rather than on
+88-question golden file (86 original plus 2 blast_radius additions) with no
+adversarial fields leaking onto ordinary questions, the new optional fields
+default to inert values, and each adversarial sub-score fails the answer it
+is supposed to fail. The judge is exercised on hand-written answers rather than on
 MockChatModel output because the mock cannot refuse - it quotes retrieved
 chunks by construction - so a mock-driven assertion would measure the mock,
 not the scoring.
@@ -39,7 +40,7 @@ def _docs() -> list[Document]:
 def test_existing_golden_file_still_loads_unchanged() -> None:
     questions = load_golden_questions(_GOLDEN_PATH)
 
-    assert len(questions) == 86
+    assert len(questions) == 88
     assert all(not question.is_adversarial for question in questions)
     assert all(question.forbidden_ids == [] and question.must_mention_ids == [] for question in questions)
 
