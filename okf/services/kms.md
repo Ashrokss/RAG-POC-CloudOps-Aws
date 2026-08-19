@@ -15,8 +15,8 @@ owned_by: "TBD - set in review"
 
 ## What it is
 
-Encryption key management. Its failures are permission failures on the key policy, surfacing as errors in whatever service was trying to decrypt.
+Encryption key management. Its failures are either permission failures on the key policy, or request-rate throttling on `Encrypt`/`Decrypt` calls when a caller's volume exceeds the account's KMS quota - surfacing as errors in whatever service was trying to use the key.
 
 ## Known failure modes
 
-- [Key policy blocking a replication or decrypt path](../failure-modes/config-regression.md) - seen in INC-2025-0302
+- [Request-rate quota exceeded by a replication burst](../failure-modes/throttling.md) - seen in INC-2025-0302
