@@ -10,6 +10,10 @@ incident_ids: ["INC-2025-0301", "INC-2025-1002", "INC-2025-0901"]
 
 A change to policy, IaC tooling, or a dependency version silently drops or alters something a downstream consumer relied on - a permission statement, a variable a module used to read, a memory footprint - and nothing in the review or apply step surfaces the drop, because the diff is large, the failure mode is a silent fallback rather than an error, or nothing validated the new value against what the consumer actually needs.
 
+## Playbook
+
+[Responding to a silent config or dependency regression](../playbooks/config-regression.md)
+
 ## Seen in
 
 - [INC-2025-0301](../../data/raw_rca_docs/synthetic/inc-2025-0301-s3-bucket-policy-regression.md) - a Terraform merge regenerating an S3 bucket policy referenced a stale data source instead of the checked-in JSON, silently dropping the `AllowCloudFrontOAI` statement; the plan's full-JSON diff didn't make the missing statement visually obvious to the reviewer, and every CloudFront-forwarded request got `403 Forbidden` for 26 minutes.

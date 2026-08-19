@@ -10,6 +10,10 @@ incident_ids: ["INC-2025-0601", "INC-2025-0202", "INC-2025-0702", "INC-2025-0302
 
 A request-volume ceiling - an account-level rate limit, a fixed concurrency reservation, or a downstream service's own request-rate quota - gets exceeded and the excess is rejected outright rather than queued or auto-scaled. The ceiling is often sized for steady-state traffic and never revisited as a specific workload's demand grows or spikes.
 
+## Playbook
+
+[Responding to a request-rate ceiling being hit](../playbooks/throttling.md)
+
 ## Seen in
 
 - [INC-2025-0601](../../data/raw_rca_docs/synthetic/inc-2025-0601-apigw-burst-throttling.md) - API Gateway's account-level throttle (10,000 RPS steady / 5,000-request burst) rejected 38% of requests during a push-notification traffic surge; the campaign's own 12,000 RPS projection had already exceeded the default ceiling three days before a quota increase was requested.
