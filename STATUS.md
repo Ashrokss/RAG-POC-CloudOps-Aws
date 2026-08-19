@@ -2,7 +2,30 @@
 
 **Branch:** `feature/rag-aws-sre` · **PR:** #1 · **Deployed:** http://rag-sre-poc-frontend.azurewebsites.net
 **Live config:** Azure `gpt-4o-mini` chat + `text-embedding-3-small` embeddings · 25 docs / 233 chunks
-**Tests:** 101 passing offline (was 38)
+**Tests:** 112 passing offline (was 38)
+
+## "What's the accuracy?" — there is no single number, on purpose
+
+This system is scored on several axes that don't collapse into one percentage without hiding what
+each one actually means - this is why `eval run` reports golden/adversarial separately and
+question-type-by-question-type rather than one pooled score. The real, current, live-verified
+numbers (`reports/eval_comparison_live-adversarial-t7-grounding-fix.md`, 13 adversarial questions ×
+4 strategies):
+
+| Dimension | Result |
+|---|---|
+| Refuses when it should (unanswerable trap questions) | **100%** (13/13, all 4 strategies) |
+| Never leaks a forbidden fact | **100%** (0 leaks anywhere in the adversarial set) |
+| Names every fact a question requires it to (`required_id_recall`) | **25%-100%**, strategy- and question-dependent - the widest-ranging, least single-number-able metric |
+| Hallucinated date/incident-id next to a real citation (`grounding_date` + `grounding_unretrieved_incident`) | Improved this session (see item 1 below) but **not zero** - averages ~0.2-0.8 violations per aggregate-type question depending on strategy |
+
+**The 88-question golden set (ordinary Q&A) has never been scored live** - only in mock mode, which
+the README already flags as producing artificially low scores since `MockChatModel` quotes text
+verbatim instead of paraphrasing. So there is currently no live "how often does it get a normal
+question right" percentage at all; only the 13-question adversarial set and 2 ad hoc blast_radius
+questions have been checked against the real model. A live golden-set run (`python -m cli.eval run
+--sets golden`, ~350 chat calls across 4 strategies) would be the way to get one, at a
+proportionally larger cost.
 
 > **Every eval report produced before the k-cap fix is void.** `hybrid` was returning up to 2k
 > documents while every other strategy returned k, so it answered from double the context *and*
@@ -21,6 +44,7 @@
 | T4 | `okf/` service vocabulary | Metadata filters match the whole corpus instead of ~half |
 | T5 | Aggregate routing | "How many / list every / longest / total" questions are answerable at all |
 | T6 | okf/ failure-modes + playbooks + blast_radius routing | Every service->failure-mode link resolves, each has a remediation runbook, and "what else breaks if X is down" is answerable from the depends_on graph |
+| T7 | blast_radius routing-regex fix + a generate()-level grounding retry | The dependency-impact route now actually triggers on natural phrasings; hallucinated incident-id/date claims get one automatic self-correction pass instead of shipping uncaught |
 | — | Embedding-provenance guard | A mismatched index fails with one clear message instead of a Chroma dimension error per strategy |
 
 ### T1 — cap every strategy at k
@@ -80,6 +104,23 @@ Two new golden questions (`question_type: blast_radius`) exercise it; the 88-que
 count and the "all answerable from one retrievable chunk" description of it were updated to match,
 since these two are answered from `okf/` instead.
 
+### T7 — blast_radius routing fix, and a self-correcting generate()
+Two fixes, found chasing what first looked like one bug. `_BLAST_RADIUS_RE` required the literal
+adjacent phrase "affected if"; "what would be affected **downstream** if X had an outage" - a
+natural way to ask this - has a word in between and silently fell through to plain `retrieval`
+with no dependency graph in its context at all. Fixed by tolerating up to 3 words between the
+trigger verb and "if"; re-checked against every golden/adversarial question afterward to confirm
+nothing else newly misclassified.
+
+Separately, `generate()`'s single "retry once" step is now `_find_corrections()` - one place that
+gathers every issue (missing citation, a `blast_radius` answer omitting a listed service, a
+hallucinated date/incident-id `check_grounding` catches) before one combined retry, instead of
+several independent retry-and-re-check passes that could each perturb the answer. `check_grounding`
+and `check_dependency_completeness` both moved from `eval/` into `rag/chain/` and `rag/routing/`
+respectively, since `generate()` now calls them directly on the live answer path, not only eval
+scoring after the fact - `rag/` must not depend on `eval/`. All of it is unit-tested with a scripted
+stub chat model (`tests/test_rag_chain.py`), not only live spot-checks.
+
 ---
 
 ## Verified live on the deployed app
@@ -95,10 +136,37 @@ since these two are answered from `okf/` instead.
 
 ## Needs attention
 
-**1. Answers still get quantities wrong.** The detection-gap answer named the right incident but
-said "~4 h 12 m" where the doc says **6 h 27 m** (4 h 12 m is the data-staleness figure from the
-same document). Right incident, wrong number — exactly the class `eval/grounding.py` exists to
-count. Worth a prompt iteration.
+**1. Answers still get quantities wrong - partially improved, not solved.** The original bug: the
+detection-gap answer named the right incident but said "~4 h 12 m" where the doc says **6 h 27 m**
+(4 h 12 m is the data-staleness figure from the *same* document). That specific class - a real
+figure, just the wrong one from a document that states several - is structurally invisible to
+`check_grounding` (moved to `rag/chain/grounding.py`): both numbers genuinely appear somewhere in
+that incident's text, so nothing looks unsupported. A lexical presence check cannot tell "wrong
+figure, right document" from "right figure" without understanding what was asked; that needs an
+NLI/claim-extraction model, not a regex, and is out of scope for this pass.
+
+What *is* now fixed: `generate()` self-corrects when a citation names an incident id or date that
+never appears in the retrieved text at all (pure hallucination, not "wrong nearby figure") - one
+retry, gathered together with any other issue found (see T7). Also added: an explicit prompt
+warning about this exact adjacent-figure confusion (detection gap vs. total duration vs.
+data-staleness window, all in one document). Re-ran the live adversarial set before/after
+(`eval_comparison_live-adversarial-t6.md` → `-t7-grounding-fix.md`), aggregate-type questions only:
+
+| Strategy | date viol. (before → after) | unretrieved-id viol. (before → after) | quality_score (before → after) |
+|---|---|---|---|
+| hybrid | 0.83 → 0.83 | 0.33 → **0.00** | 0.495 → 0.542 |
+| hybrid_rerank | 0.83 → 0.83 | 0.00 → 0.00 | 0.578 → 0.664 |
+| keyword | 0.83 → 0.83 | 0.50 → **0.17** | 0.516 → 0.563 |
+| semantic | 0.83 → **0.17** | 0.50 → 0.33 | 0.662 → 0.624 (dipped slightly - `required_id_recall` also moved on this run, and quality_score averages several components together) |
+
+Honest read: hallucinated incident-id references dropped meaningfully on 3 of 4 strategies, and
+`semantic`'s date violations dropped from 0.83 to 0.17 - real, live-verified improvement. Date
+violations did **not** move on the other three strategies. Given the original bug report was
+specifically the wrong-nearby-figure case, this fix does not claim to have resolved it - only the
+narrower, outright-fabrication case it can actually see. `number` violations (aggregate totals)
+were deliberately left out of the retry trigger, since a legitimate total is *supposed* to be a
+figure absent from the source - that's the point of asking for one - so those counts moved on their
+own (live model variance) and aren't a signal either way.
 
 **2. The index and the app must agree on the embedding model.** The shipped index had been built
 with mock embeddings (256-dim) while the live app embeds queries with `text-embedding-3-small`
@@ -111,12 +179,11 @@ redeploying must re-ingest with the same provider the app is configured for.**
 skeleton frames for 7+ minutes; `az webapp restart` fixed it immediately. F1 tier, shared CPU.
 Restart after each deploy and confirm the console renders before declaring it live.
 
-**4. ~~Refusal behaviour is unverified.~~ Verified live** (`reports/eval_comparison_live-adversarial-t6.md`):
-`refusal_correct = 1.000` on both "unanswerable" trap questions, across all four strategies. No
-forbidden-id leakage anywhere in the adversarial set either. The `aggregate`-type adversarial
-questions are the weak spot live: grounding violations average ~0.8 wrong dates and ~1.2-1.7 wrong
-numbers per question (worst on `keyword`, best on `hybrid_rerank`/`semantic`) - consistent with
-item 1 above, not a new problem, but now with a live number attached to it.
+**4. ~~Refusal behaviour is unverified.~~ Verified live** (`reports/eval_comparison_live-adversarial-t6.md`,
+reconfirmed unchanged in `-t7-grounding-fix.md`): `refusal_correct = 1.000` on both "unanswerable"
+trap questions, across all four strategies. No forbidden-id leakage anywhere in the adversarial set
+either. The `aggregate`-type adversarial questions remain the weak spot live - see item 1 above for
+the current before/after numbers and what's actually fixed versus still open.
 
 **5. `okf/` skeletons need their owners.** (The team's `okf/failure-modes/*.md` and
 `okf/playbooks/*.md` have since landed on the branch - all 18 failure-mode slugs the service files

@@ -176,3 +176,64 @@ def test_generate_does_not_retry_an_already_complete_dependency_answer(
     )
 
     assert stub.call_count == 1
+
+
+def _grounded_docs() -> list[Document]:
+    return [
+        Document(
+            page_content=(
+                "On 2025-10-02 the module bump broke the trust policy. "
+                "The reconciler was delayed 84 minutes."
+            ),
+            metadata={
+                "chunk_id": "chunk-1002",
+                "doc_id": "doc-1002",
+                "incident_id": "INC-2025-1002",
+                "section": "Summary",
+            },
+        )
+    ]
+
+
+def test_generate_retries_when_a_stated_date_is_not_grounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Mirrors the actual live bake-off failure check_grounding was built to
+    # catch: a right incident, wrong date, that a citation tag alone cannot
+    # reveal since the tag itself is correct.
+    stub = _ScriptedChatModel(
+        responses=[
+            "INC-2025-1002 occurred on 30 May and delayed the reconciler 84 minutes [INC-2025-1002 · Summary].",
+            "INC-2025-1002 occurred on 2 October and delayed the reconciler 84 minutes [INC-2025-1002 · Summary].",
+        ]
+    )
+    monkeypatch.setattr(rag_chain_module, "get_chat_model", lambda: stub)
+
+    answer, _ = generate("When did INC-2025-1002 happen?", docs=_grounded_docs())
+
+    assert stub.call_count == 2
+    assert "October" in answer
+
+
+def test_generate_does_not_retry_for_a_legitimate_computed_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A "number" violation alone must never trigger a retry: an aggregate
+    # total is supposed to be a figure that appears nowhere in the source -
+    # that's the point of asking for one - so retrying it would fight the
+    # question rather than fix an error.
+    stub = _ScriptedChatModel(
+        responses=["INC-2025-1002's cascading cost came to $41,400 across two teams [INC-2025-1002 · Summary]."]
+    )
+    monkeypatch.setattr(rag_chain_module, "get_chat_model", lambda: stub)
+
+    generate("What was the total cost of INC-2025-1002?", docs=_grounded_docs())
+
+    assert stub.call_count == 1
+
+
+def test_generate_does_not_retry_an_already_grounded_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _ScriptedChatModel(
+        responses=["INC-2025-1002 occurred on 2 October and delayed the reconciler 84 minutes [INC-2025-1002 · Summary]."]
+    )
+    monkeypatch.setattr(rag_chain_module, "get_chat_model", lambda: stub)
+
+    generate("When did INC-2025-1002 happen?", docs=_grounded_docs())
+
+    assert stub.call_count == 1

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
-from eval.grounding import check_grounding, count_by_kind
+from rag.chain.grounding import check_grounding, count_by_kind
 
 
 def _docs() -> list[Document]:

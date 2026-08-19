@@ -34,7 +34,7 @@ from __future__ import annotations
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
-from eval.grounding import INCIDENT_RE, check_grounding, count_by_kind
+from rag.chain.grounding import INCIDENT_RE, check_grounding, count_by_kind
 from rag.chain.rag_chain import INSUFFICIENT_EVIDENCE_PHRASE
 from rag.llm.factory import get_chat_model
 from rag.models import Citation, GoldenQuestion
