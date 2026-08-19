@@ -111,10 +111,12 @@ redeploying must re-ingest with the same provider the app is configured for.**
 skeleton frames for 7+ minutes; `az webapp restart` fixed it immediately. F1 tier, shared CPU.
 Restart after each deploy and confirm the console renders before declaring it live.
 
-**4. Refusal behaviour is unverified.** The two "unanswerable" trap questions cannot be tested in
-mock mode (`MockChatModel` echoes retrieved chunks and never refuses), so mock `refusal_correct`
-is 0.000 — that measures the mock, not the system. Needs a live adversarial run:
-`python -m cli.eval run --sets adversarial` (real billed calls).
+**4. ~~Refusal behaviour is unverified.~~ Verified live** (`reports/eval_comparison_live-adversarial-t6.md`):
+`refusal_correct = 1.000` on both "unanswerable" trap questions, across all four strategies. No
+forbidden-id leakage anywhere in the adversarial set either. The `aggregate`-type adversarial
+questions are the weak spot live: grounding violations average ~0.8 wrong dates and ~1.2-1.7 wrong
+numbers per question (worst on `keyword`, best on `hybrid_rerank`/`semantic`) - consistent with
+item 1 above, not a new problem, but now with a live number attached to it.
 
 **5. `okf/` skeletons need their owners.** (The team's `okf/failure-modes/*.md` and
 `okf/playbooks/*.md` have since landed on the branch - all 18 failure-mode slugs the service files
@@ -129,6 +131,18 @@ this deserve a concept file?" call.
 
 **6. `api/main.py` has no authentication**, and Chroma persists to container-local disk (no shared
 state across instances, re-ingest on every redeploy). Both flagged, neither in scope for this pass.
+
+**7. `blast_radius` under-reports transitive dependents when a concrete incident excerpt is also in
+context.** Asking live "what would be affected downstream if ACM had an outage" - the `### DEPENDENCY
+IMPACT ###` block correctly listed all four (`alb, cloudfront, ecs, route-53`; verified directly via
+`blast_radius_context()`), but the model's prose named only `alb` and `cloudfront`, the two also
+mentioned by name in the one retrieved incident excerpt (INC-2025-0801) - it appears to have anchored
+on the concrete narrative and dropped the two transitive dependents that had no supporting text. The
+single-hop RDS question (no ambiguity between direct/transitive) answered correctly with zero
+citations, exactly as designed, so this looks specific to the direct-vs-transitive split rather than
+the route generally. Ad hoc spot check, not yet a golden/adversarial assertion - worth either a
+prompt tweak (state the full DEPENDENCY IMPACT list before narrating the excerpt) or a grounding-style
+check asserting every id in the block's downstream list appears in the answer.
 
 ---
 
