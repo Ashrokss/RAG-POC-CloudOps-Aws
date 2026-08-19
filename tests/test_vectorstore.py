@@ -16,7 +16,13 @@ from langchain_core.documents import Document
 
 from config.settings import get_settings
 from rag.embeddings.mock_embeddings import MockBedrockEmbeddings
-from rag.vectorstore.chroma_store import build_index, get_collection_stats
+import rag.vectorstore.chroma_store as chroma_store
+from rag.vectorstore.chroma_store import (
+    EmbeddingMismatchError,
+    build_index,
+    get_collection_stats,
+    get_vectorstore,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -64,3 +70,33 @@ def test_build_index_reset_false_on_same_chunks_does_not_duplicate() -> None:
     stats = get_collection_stats(vectorstore)
 
     assert stats["count"] == 3
+
+
+def test_build_index_stamps_the_embedding_model() -> None:
+    vectorstore = build_index(_make_chunks(2), reset=True)
+
+    assert vectorstore._collection.metadata["embedding_model"] == "mock:hash-256"
+
+
+def test_reading_an_index_built_by_another_embedder_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The deployed console hit this as "Collection expecting embedding with
+    # dimension of 256, got 1536", once per strategy, from inside Chroma - and
+    # would have hit nothing at all had the two models shared a dimension.
+    build_index(_make_chunks(2), reset=True)
+    monkeypatch.setattr(
+        chroma_store, "embedding_model_id", lambda: "azure:text-embedding-3-small"
+    )
+
+    with pytest.raises(EmbeddingMismatchError, match="mock:hash-256"):
+        get_vectorstore(MockBedrockEmbeddings())
+
+
+def test_unstamped_legacy_collection_is_still_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Indexes built before the stamp existed carry no provenance; refusing them
+    # would break every existing deployment for no safety gain.
+    vectorstore = build_index(_make_chunks(2), reset=True)
+    vectorstore._collection.modify(metadata={"note": "no embedding_model key"})
+
+    assert get_vectorstore(MockBedrockEmbeddings()) is not None
