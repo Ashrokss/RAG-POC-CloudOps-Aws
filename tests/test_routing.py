@@ -56,6 +56,17 @@ def test_blast_radius_questions_route_to_the_dependency_graph(question: str) -> 
     assert classify(question) == "blast_radius"
 
 
+def test_okf_index_files_are_not_read_as_service_concept_files() -> None:
+    # index.md carries no frontmatter, so a naive *.md glob would register a
+    # bogus "index" id/alias (path.stem is the fallback when metadata.get
+    # ("id") finds nothing) - exactly the bug adding okf/services/index.md
+    # introduced until the loader learned to skip OKF's reserved filenames.
+    from rag.ingestion.loader import service_alias_map, service_dependency_graph
+
+    assert "index" not in service_alias_map()
+    assert "index" not in service_dependency_graph()
+
+
 def test_downstream_of_walks_the_okf_services_depends_on_graph() -> None:
     # Direct (glue depends_on rds) plus transitive (step-functions depends_on
     # glue) - the whole reason downstream_of exists rather than a one-hop

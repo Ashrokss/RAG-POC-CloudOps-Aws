@@ -40,6 +40,22 @@ logger = logging.getLogger(__name__)
 # package (which copies rag/ and okf/ side by side) resolves it the same way.
 _OKF_SERVICES_DIR = Path(__file__).resolve().parents[2] / "okf" / "services"
 
+# OKF's reserved filenames: index.md is a directory listing, not a concept
+# file, and carries no frontmatter - parsing it as a service would register a
+# bogus "index" id and alias (path.stem falls back to it when metadata.get
+# ("id") finds nothing). log.md is reserved by the same convention even
+# though nothing in this repo writes one yet.
+_OKF_RESERVED_FILENAMES = {"index.md", "log.md"}
+
+
+def _okf_service_files() -> list[Path]:
+    return [
+        path
+        for path in sorted(_OKF_SERVICES_DIR.glob("*.md"))
+        if path.name.lower() not in _OKF_RESERVED_FILENAMES
+    ]
+
+
 _warned_unknown_services: set[str] = set()
 
 # The two source folders, defined here (beside the loader that walks them)
@@ -57,7 +73,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
 def service_alias_map() -> dict[str, str]:
     """lowercased alias -> canonical service id, built from okf/services/*.md."""
     mapping: dict[str, str] = {}
-    for path in sorted(_OKF_SERVICES_DIR.glob("*.md")):
+    for path in _okf_service_files():
         metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
         service_id = str(metadata.get("id") or path.stem)
         aliases = metadata.get("aliases") or []
@@ -75,7 +91,7 @@ def service_dependency_graph() -> dict[str, list[str]]:
     names), so this needs no alias resolution the way canonical_service()
     does."""
     graph: dict[str, list[str]] = {}
-    for path in sorted(_OKF_SERVICES_DIR.glob("*.md")):
+    for path in _okf_service_files():
         metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
         service_id = str(metadata.get("id") or path.stem)
         depends_on = metadata.get("depends_on") or []
