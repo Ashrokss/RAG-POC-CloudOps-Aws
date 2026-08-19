@@ -94,7 +94,9 @@ mock mode (`MockChatModel` echoes retrieved chunks and never refuses), so mock `
 is 0.000 — that measures the mock, not the system. Needs a live adversarial run:
 `python -m cli.eval run --sets adversarial` (real billed calls).
 
-**5. `okf/` skeletons need their owners.** Every service file says `owned_by: "TBD - set in
+**5. `okf/` skeletons need their owners.** (The team's `okf/failure-modes/*.md` and
+`okf/playbooks/*.md` have since landed on the branch - all 18 failure-mode slugs the service files
+link to now resolve.) Every service file says `owned_by: "TBD - set in
 review"`. The aliases are correct (generated from the corpus); `depends_on`, ownership and the
 failure-mode lists need the owning SRE before merge. 17 service names still unclaimed —
 `terraform`, `kafka`, `bgp`, `clickhouse`, `nsg`, `azure-vnet` and similar — each a genuine "does
