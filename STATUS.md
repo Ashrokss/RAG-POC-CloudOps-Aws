@@ -2,7 +2,7 @@
 
 **Branch:** `feature/rag-aws-sre` · **PR:** #1 · **Deployed:** http://rag-sre-poc-frontend.azurewebsites.net
 **Live config:** Azure `gpt-4o-mini` chat + `text-embedding-3-small` embeddings · 25 docs / 233 chunks
-**Tests:** 92 passing offline (was 38)
+**Tests:** 101 passing offline (was 38)
 
 > **Every eval report produced before the k-cap fix is void.** `hybrid` was returning up to 2k
 > documents while every other strategy returned k, so it answered from double the context *and*
@@ -20,6 +20,7 @@
 | T3 | Deterministic chunk ids + corpus caching | Re-ingest no longer duplicates the corpus; 26× faster retrieval |
 | T4 | `okf/` service vocabulary | Metadata filters match the whole corpus instead of ~half |
 | T5 | Aggregate routing | "How many / list every / longest / total" questions are answerable at all |
+| T6 | okf/ failure-modes + playbooks + blast_radius routing | Every service->failure-mode link resolves, each has a remediation runbook, and "what else breaks if X is down" is answerable from the depends_on graph |
 | — | Embedding-provenance guard | A mismatched index fails with one clear message instead of a Chroma dimension error per strategy |
 
 ### T1 — cap every strategy at k
@@ -57,6 +58,27 @@ model only ever sees k chunks. `rag/routing/` adds an incident table (one row pe
 from their own Impact/Detection sections) and a regex router. Aggregate questions get the filtered
 index **plus** chunk text for every incident it lists, so answers stay citable. `RAGAnswer.route`
 records the path; the console shows it.
+
+### T6 — okf/ failure-modes, playbooks, and dependency-graph routing
+`okf/services/*.md`'s `../failure-modes/*.md` links all pointed at files that didn't exist yet;
+`okf/failure-modes/` (18 files, one per failure mode named across the 21 service files) closes
+every one of them, grounded in the actual incident RCA text rather than the service skeletons'
+one-line descriptions. `okf/playbooks/` (18 files) adds a remediation runbook per failure mode -
+signals, immediate mitigation, prevention - synthesized from the Resolution/Action Items sections
+of the incidents that exhibit it, cross-linked back to the failure mode and forward to related
+ones (`backlog` -> `throttling`/`oom`, `timeout` -> `iops-throttling`). One factual correction
+surfaced in the process: `okf/services/kms.md` and `s3.md` both described INC-2025-0302 as a KMS
+*permission* problem; the RCA's actual root cause is KMS *request-rate throttling* (a quota, not a
+policy denial) - fixed, and both now link to a new `throttling.md`.
+
+`depends_on` (present in every service file's frontmatter, unused until now) now feeds a third
+route, `blast_radius`: `rag/routing/dependency_graph.py` inverts the forward depends_on graph and
+walks it breadth-first, so "what services depend on RDS" reports Glue (direct) and Step Functions
+(transitive, two hops) rather than only direct dependents. The graph has a real cycle (`alb` and
+`ecs` each depend on the other) - `downstream_of()` is visited-tracked specifically because of it.
+Two new golden questions (`question_type: blast_radius`) exercise it; the 88-question golden set
+count and the "all answerable from one retrievable chunk" description of it were updated to match,
+since these two are answered from `okf/` instead.
 
 ---
 
@@ -96,9 +118,12 @@ is 0.000 — that measures the mock, not the system. Needs a live adversarial ru
 
 **5. `okf/` skeletons need their owners.** (The team's `okf/failure-modes/*.md` and
 `okf/playbooks/*.md` have since landed on the branch - all 18 failure-mode slugs the service files
-link to now resolve.) Every service file says `owned_by: "TBD - set in
-review"`. The aliases are correct (generated from the corpus); `depends_on`, ownership and the
-failure-mode lists need the owning SRE before merge. 17 service names still unclaimed —
+link to now resolve, each with a playbook. `depends_on` is also now consumed, by the new
+`blast_radius` route, rather than sitting unused.) Every service file still says
+`owned_by: "TBD - set in review"`. The aliases are correct (generated from the corpus); ownership,
+and whether each `depends_on` edge is actually correct (`alb`/`ecs` currently depend on each
+other, which is architecturally suspect and wasn't ground-truthed against any incident the way the
+kms/s3 correction above was), need the owning SRE before merge. 17 service names still unclaimed —
 `terraform`, `kafka`, `bgp`, `clickhouse`, `nsg`, `azure-vnet` and similar — each a genuine "does
 this deserve a concept file?" call.
 
@@ -109,9 +134,9 @@ state across instances, re-ingest on every redeploy). Both flagged, neither in s
 
 ## Out of scope for this pass
 
-The agentic loop (decompose → multi-retrieve → self-check → structured RCA with 5-Whys), the rest
-of the OKF layer (failure modes, playbooks, dependency graph), document-level ABAC, and moving
-Chroma off container-local disk. Sequence those now that the eval harness can detect a regression.
+The agentic loop (decompose → multi-retrieve → self-check → structured RCA with 5-Whys),
+document-level ABAC, and moving Chroma off container-local disk. Sequence those now that the eval
+harness can detect a regression.
 
 ---
 
