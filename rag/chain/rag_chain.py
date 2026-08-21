@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 import time
 from functools import lru_cache
+from pathlib import Path
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -43,7 +44,7 @@ from rag.chain.grounding import check_grounding, split_outside_knowledge
 from rag.chain.prompt import OUTSIDE_KNOWLEDGE_MARKER, RAG_PROMPT, SOURCE_HEADER_TEMPLATE
 from rag.embeddings.factory import get_embeddings
 from rag.ingestion.chunker import chunk_all
-from rag.ingestion.loader import CORPUS_DIRS, load_rca_documents
+from rag.ingestion.loader import CORPUS_DIRS, load_rca_documents, parse_frontmatter
 from rag.llm.factory import get_chat_model
 from rag.models import Citation, RAGAnswer
 from rag.retrieval.factory import get_retriever
@@ -53,9 +54,13 @@ from rag.routing.dependency_graph import (
     render_impact,
     reset_dependency_graph,
 )
+from rag.routing.failure_pattern import match_known_pattern, reset_failure_pattern_cache
 from rag.routing.incident_table import filter_rows, incident_rows, render_rows, reset_incident_table
 from rag.routing.router import classify, question_services
 from rag.vectorstore.chroma_store import get_vectorstore
+
+_OKF_ROOT = Path(__file__).resolve().parents[2] / "okf"
+_KNOWN_PATTERN_MODEL_ID = "none (matched known pattern)"
 
 _CITATION_RE = re.compile(r"\[([^\]·]+)·([^\]]+)\]")
 _SNIPPET_LENGTH = 150
@@ -90,8 +95,8 @@ def _corpus_chunks() -> list[Document]:
 def _cached_retriever(strategy: str, k: int) -> BaseRetriever:
     # (strategy, k) is the retriever's whole identity: the vector store handle
     # and the chunk list behind it are fixed for the process's lifetime, and
-    # rebuilding BM25 from 233 chunks per call was pure waste - an 88-question
-    # eval across 4 strategies paid for it 352 times.
+    # rebuilding BM25 from 233 chunks per call was pure waste - an 89-question
+    # eval across 4 strategies paid for it 356 times.
     #
     # keyword is pure BM25 over the chunk list and never touches Chroma, so it
     # must not open the collection: doing so made an embedding-model mismatch
@@ -113,6 +118,7 @@ def reset_corpus_cache() -> None:
             clear()
     reset_incident_table()
     reset_dependency_graph()
+    reset_failure_pattern_cache()
 
 
 def retrieve_only(question: str, strategy: str, k: int) -> list[Document]:
@@ -190,6 +196,74 @@ def blast_radius_context(question: str) -> str:
     return "### DEPENDENCY IMPACT ###\n" + render_impact(impact)
 
 
+def _extract_section(body: str, header: str) -> str:
+    """Body text under '## {header}', up to the next '## ' heading or the
+    end of the file. Simple substring splitting, not a markdown parser - safe
+    because okf/failure-modes/*.md and okf/playbooks/*.md both use a small,
+    fixed set of headers this project itself authored, not arbitrary
+    user-supplied markdown."""
+    marker = f"## {header}"
+    start = body.find(marker)
+    if start == -1:
+        return ""
+    start += len(marker)
+    next_header = body.find("\n## ", start)
+    section = body[start:next_header] if next_header != -1 else body[start:]
+    return section.strip()
+
+
+def render_known_pattern_answer(docs: list[Document]) -> tuple[str, list[Citation]]:
+    """generate()'s zero-chat-model counterpart: the corpus already has a
+    human-curated answer for this recurring failure - the failure mode plus
+    its playbook - so this reads and composes those two already-written
+    files instead of asking a model to re-derive the same analysis it (or a
+    prior run of it) already gave once. Only called when
+    retrieve_for_question has already set route="known_pattern", so the
+    match is expected to be non-None."""
+    match = match_known_pattern(docs)
+    failure_mode_id = match["failure_mode_id"]
+    matched_incident_ids = set(match["matched_incident_ids"])
+
+    fm_metadata, fm_body = parse_frontmatter(
+        (_OKF_ROOT / "failure-modes" / f"{failure_mode_id}.md").read_text(encoding="utf-8")
+    )
+    _, pb_body = parse_frontmatter(
+        (_OKF_ROOT / "playbooks" / f"{failure_mode_id}.md").read_text(encoding="utf-8")
+    )
+
+    answer = (
+        f"Recognized recurring pattern: **{fm_metadata.get('name', failure_mode_id)}** - matched "
+        f"against previously documented incidents {', '.join(sorted(matched_incident_ids))}, which "
+        f"the corpus already catalogues under this failure mode. This is the existing curated "
+        f"playbook, not a fresh analysis of this specific occurrence; if it doesn't actually fit, "
+        f"ask again with more specific detail to force a full analysis.\n\n"
+        f"**What it is**\n{_extract_section(fm_body, 'What it is')}\n\n"
+        f"**Signals**\n{_extract_section(pb_body, 'When you see this')}\n\n"
+        f"**Mitigate**\n{_extract_section(pb_body, 'Mitigate')}\n\n"
+        f"**Prevent**\n{_extract_section(pb_body, 'Prevent')}"
+    )
+
+    citations: list[Citation] = []
+    seen: set[tuple[str, str]] = set()
+    for doc in docs:
+        if doc.metadata["incident_id"] not in matched_incident_ids:
+            continue
+        key = (doc.metadata["incident_id"], doc.metadata["section"])
+        if key in seen:
+            continue
+        seen.add(key)
+        citations.append(
+            Citation(
+                doc_id=doc.metadata["doc_id"],
+                incident_id=key[0],
+                section=key[1],
+                snippet=doc.page_content[:_SNIPPET_LENGTH],
+            )
+        )
+
+    return answer, citations
+
+
 def retrieve_for_question(question: str, strategy: str, k: int) -> tuple[list[Document], str, str]:
     """(docs, index_block, route) - the whole pre-generation half of answering.
     The eval harness calls this rather than re-deriving the route itself, so a
@@ -206,6 +280,14 @@ def retrieve_for_question(question: str, strategy: str, k: int) -> tuple[list[Do
             # same graceful downgrade _AGGREGATE_RE's over-triggering already
             # relies on, rather than shipping an empty DEPENDENCY IMPACT block.
             route = "retrieval"
+
+    # known_pattern can only be decided from what got retrieved, never from
+    # the question text alone (see rag/routing/failure_pattern.py), so it is
+    # checked here rather than by classify() - and only for an otherwise
+    # ordinary question, not one already headed for the index or the
+    # dependency graph.
+    if route == "retrieval" and match_known_pattern(docs):
+        route = "known_pattern"
     return docs, index_block, route
 
 
@@ -324,17 +406,35 @@ def generate(question: str, docs: list[Document], index_block: str = "") -> tupl
     return answer, citations
 
 
+def answer_for_route(
+    question: str, docs: list[Document], index_block: str, route: str
+) -> tuple[str, list[Citation]]:
+    """generate()'s dispatch point: known_pattern skips the chat model
+    entirely (render_known_pattern_answer); every other route still goes
+    through generate(). Both answer_question() and eval/runner.py's
+    _score_one() call this rather than generate() directly, so a scored eval
+    run and a live answer take the identical shortcut - the same reasoning
+    retrieve_for_question's own docstring gives for why eval calls that
+    function instead of retrieve_only."""
+    if route == "known_pattern":
+        return render_known_pattern_answer(docs)
+    return generate(question, docs, index_block)
+
+
 def answer_question(question: str, strategy: str = "hybrid", k: int | None = None) -> RAGAnswer:
     settings = get_settings()
     resolved_k = k if k is not None else settings.retrieval_top_k
 
     start = time.perf_counter()
     docs, index_block, route = retrieve_for_question(question, strategy, resolved_k)
-    answer, citations = generate(question, docs, index_block)
+    answer, citations = answer_for_route(question, docs, index_block, route)
     latency_ms = (time.perf_counter() - start) * 1000
 
-    chat_model = get_chat_model()
-    model_id = getattr(chat_model, "model", None) or chat_model._llm_type
+    if route == "known_pattern":
+        model_id = _KNOWN_PATTERN_MODEL_ID
+    else:
+        chat_model = get_chat_model()
+        model_id = getattr(chat_model, "model", None) or chat_model._llm_type
 
     retrieved_doc_ids = list(dict.fromkeys(doc.metadata["doc_id"] for doc in docs))
 

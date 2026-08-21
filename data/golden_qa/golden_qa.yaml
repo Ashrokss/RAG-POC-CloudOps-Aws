@@ -630,3 +630,10 @@
   relevant_doc_ids: ["5040b325-bf2f-4ffb-8f90-c1a89f69e831"]
   expected_answer_summary: "Per the curated okf/services/ dependency graph, ALB and CloudFront depend directly on ACM, and ECS and Route 53 depend on it transitively (through ALB and CloudFront) - so all four would be affected downstream if ACM had an outage."
   notes: "Exercises the blast_radius route's transitive closure, not just direct dependents - ECS and Route 53 are two hops from ACM, not one."
+
+- qid: "55613e8b-a502-4ca9-a634-b1d8b7755c17"
+  question: "Repeated ENI limit exceeded and subnet IP exhaustion during VPC scale-out for Lambda and ECS"
+  question_type: known_pattern
+  relevant_doc_ids: ["fe5019d4-a53d-4734-8d7d-be844151c3d7", "90e3ea03-4631-45d3-a7ee-349ab267ccba"]
+  expected_answer_summary: "This matches the quota-exhaustion failure mode (VPC subnet IP/ENI capacity exhausted under scale-out), previously seen in INC-2025-0201 and INC-2025-0902; the playbook recommends confirming available IP capacity via describe-subnets, adding a spare/larger subnet for immediate headroom, migrating to dedicated appropriately-sized subnets per service, and alarming on available-IP-address count before it runs out."
+  notes: "Exercises the known_pattern route (rag/routing/failure_pattern.py) - describes a new symptom without naming a specific past incident. Retrieval should surface 2+ of quota-exhaustion's documented incidents (verified across all four strategies in mock mode), so the answer should come directly from the existing failure-mode/playbook content with zero chat-model calls, not a fresh generation."

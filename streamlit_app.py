@@ -129,6 +129,13 @@ if st.button("Ask", type="primary", disabled=not question.strip()):
                 "graph's downstream impact for the service(s) named, alongside whatever "
                 "the chosen strategy retrieved for them."
             )
+        elif route == "known_pattern":
+            st.caption(
+                "Known-pattern route - retrieval matched 2+ past incidents already "
+                "catalogued under one okf/failure-modes/ entry, so this answer is that "
+                "failure mode's existing playbook, not a fresh analysis. No model call "
+                "was made for this answer."
+            )
 
         grounded_half, outside_half = split_outside_knowledge(answer)
         st.write(_escape_markdown_math(grounded_half))

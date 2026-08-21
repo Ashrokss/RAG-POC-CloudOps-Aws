@@ -18,18 +18,23 @@ generation or defaulting logic beyond the plain default value.
 
 Question sets are a mapping of label -> questions, not one flat list, because
 the golden set and the adversarial set are scored by different judges and
-must never be averaged together: the golden set's 88 questions are answerable
-from one retrievable chunk (86) or the okf/ dependency graph via the
-blast_radius route (2) - never designed to be unanswerable - so pooling them
+must never be averaged together: the golden set's 89 questions are answerable
+from one retrievable chunk (86), the okf/ dependency graph via the
+blast_radius route (2), or an okf/ failure-mode + playbook via the
+known_pattern route (1) - never designed to be unanswerable - so pooling them
 with 13 questions designed to be unanswerable, corpus-wide or arithmetic
 would let a strong score on the easy set hide a total failure on the hard
 one. Every record carries its set label and the reports break out one table
 per set.
 
 Retrieval goes through rag_chain.retrieve_for_question rather than
-retrieve_only, so a scored run takes the same route (retrieval or aggregate)
-a user's question would - scoring a path the product doesn't use is how an
-eval harness ends up green while the app is wrong.
+retrieve_only, and generation through rag_chain.answer_for_route rather than
+generate directly, so a scored run takes the exact same route (retrieval,
+aggregate, blast_radius, or the zero-chat-call known_pattern) a user's
+question would - scoring a path the product doesn't use is how an eval
+harness ends up green while the app is wrong, and it's specifically how a
+known_pattern regression (generate() getting called again when it shouldn't)
+would otherwise go undetected by every report this harness produces.
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ import json
 import time
 from pathlib import Path
 
-from rag.chain.rag_chain import generate, retrieve_for_question
+from rag.chain.rag_chain import answer_for_route, retrieve_for_question
 from rag.models import GoldenQuestion
 from rag.retrieval.factory import STRATEGIES
 from rag.routing.incident_table import incident_rows
@@ -103,7 +108,7 @@ def _score_one(
     start = time.perf_counter()
     docs, index_block, route = retrieve_for_question(golden_question.question, strategy, k)
     retrieved_doc_ids = list(dict.fromkeys(doc.metadata["doc_id"] for doc in docs))
-    answer, citations = generate(golden_question.question, docs, index_block)
+    answer, citations = answer_for_route(golden_question.question, docs, index_block, route)
     latency_ms = (time.perf_counter() - start) * 1000
 
     relevant_doc_ids = _resolve_relevant_doc_ids(golden_question)

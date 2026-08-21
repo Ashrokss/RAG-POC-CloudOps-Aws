@@ -22,7 +22,7 @@ from pydantic import PrivateAttr
 
 import rag.chain.rag_chain as rag_chain_module
 from config.settings import get_settings
-from rag.chain.rag_chain import answer_question, generate
+from rag.chain.rag_chain import answer_for_route, answer_question, generate
 from rag.models import RAGAnswer, RCADocumentMeta
 from rag.vectorstore.chroma_store import build_index
 
@@ -237,3 +237,87 @@ def test_generate_does_not_retry_an_already_grounded_answer(monkeypatch: pytest.
     generate("When did INC-2025-1002 happen?", docs=_grounded_docs())
 
     assert stub.call_count == 1
+
+
+def _quota_exhaustion_docs() -> list[Document]:
+    # Two of okf/failure-modes/quota-exhaustion.md's three documented
+    # incidents - enough on their own to clear the ">= 2 agreeing" bar.
+    return [
+        Document(
+            page_content="VPC-attached Lambda functions ran out of free IP addresses in a shared subnet.",
+            metadata={
+                "chunk_id": "chunk-0201",
+                "doc_id": "doc-0201",
+                "incident_id": "INC-2025-0201",
+                "section": "Root Cause",
+            },
+        ),
+        Document(
+            page_content="ECS Fargate task placements failed at ENI creation during a scale-out.",
+            metadata={
+                "chunk_id": "chunk-0902",
+                "doc_id": "doc-0902",
+                "incident_id": "INC-2025-0902",
+                "section": "Root Cause",
+            },
+        ),
+    ]
+
+
+def test_answer_for_route_dispatches_known_pattern_without_calling_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _explode(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("generate() must not be called for a known_pattern route")
+
+    monkeypatch.setattr(rag_chain_module, "generate", _explode)
+
+    answer, citations = answer_for_route(
+        "We keep running out of IPs when we scale out",
+        docs=_quota_exhaustion_docs(),
+        index_block="",
+        route="known_pattern",
+    )
+
+    assert "quota" in answer.lower() or "Subnet IP" in answer
+    assert {c.incident_id for c in citations} == {"INC-2025-0201", "INC-2025-0902"}
+
+
+def test_answer_question_matches_a_known_pattern_without_calling_the_chat_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", "known_pattern_test")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(rag_chain_module, "retrieve_only", lambda question, strategy, k: _quota_exhaustion_docs())
+
+    def _explode() -> None:
+        raise AssertionError("get_chat_model() must not be called for a known_pattern match")
+
+    monkeypatch.setattr(rag_chain_module, "get_chat_model", _explode)
+
+    answer = answer_question("We keep running out of IP addresses whenever we scale out - what's going on?")
+
+    assert answer.route == "known_pattern"
+    assert answer.model_id == "none (matched known pattern)"
+    assert len(answer.citations) > 0
+
+
+def test_answer_question_still_generates_for_a_novel_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sample_chunks: list[Document]
+) -> None:
+    # sample_chunks' incident ids (INC-LAMBDA, INC-RDS, ...) are test
+    # fixtures, not real corpus incidents - okf/failure-modes/*.md has no
+    # entry for any of them, so this must fall through to generate() exactly
+    # as before known_pattern existed.
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", "known_pattern_negative_test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(rag_chain_module, "_corpus_chunks", lambda: sample_chunks)
+    build_index(sample_chunks, reset=True)
+
+    answer = answer_question("What was the root cause of the Lambda incident?", strategy="hybrid", k=3)
+
+    assert answer.route != "known_pattern"
+    assert answer.answer != ""

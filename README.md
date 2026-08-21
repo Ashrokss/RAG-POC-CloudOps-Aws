@@ -59,7 +59,7 @@ Citations (1):
   the database's hard limit. The push notification was the trigger, not the root cause;
 ```
 
-`eval run` scores two question sets in one invocation and reports them separately: the 88 golden
+`eval run` scores two question sets in one invocation and reports them separately: the 89 golden
 questions (`data/golden_qa/golden_qa.yaml`, scored on retrieval metrics plus token overlap) and the
 13 adversarial ones (`data/golden_qa/adversarial_qa.yaml`, scored on refusal correctness, required
 incident-id recall, forbidden-id leakage and grounding violations). It writes
@@ -68,7 +68,7 @@ adversarial`.
 
 The adversarial set exists because the golden set contains zero unanswerable questions, zero
 aggregates and zero refusal traps - a system that never refuses and never counts scores well on all
-88. Its scoring catches things token overlap cannot: a right incident with a wrong date, or the
+89. Its scoring catches things token overlap cannot: a right incident with a wrong date, or the
 same cost figure counted twice into a total that appears nowhere in the corpus (`eval/grounding.py`).
 
 Questions asking to count, rank, enumerate or total are routed off the vector index entirely

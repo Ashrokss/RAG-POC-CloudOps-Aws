@@ -37,7 +37,13 @@ from typing import Literal
 
 from rag.ingestion.loader import service_alias_map
 
-Route = Literal["retrieval", "aggregate", "blast_radius"]
+Route = Literal["retrieval", "aggregate", "blast_radius", "known_pattern"]
+# known_pattern is never returned by classify() - the question text alone
+# can't say whether this is a recurrence, only what got retrieved for it can
+# (see rag/routing/failure_pattern.py). It's assigned by
+# rag_chain.retrieve_for_question after retrieval runs, overriding a plain
+# "retrieval" classification. It's listed here only so Route stays the one
+# accurate type for every value RAGAnswer.route can actually hold.
 
 _BLAST_RADIUS_RE = re.compile(
     r"\b(depends? on|dependent on|dependenc(?:y|ies) of|relies? on|reliant on|"
