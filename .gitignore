@@ -1,0 +1,19 @@
+.env
+.venv/
+data/chroma_db/*
+!data/chroma_db/.gitkeep
+reports/*.md
+reports/*.csv
+reports/*.jsonl
+!reports/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# deploy/redeploy.ps1 build artifacts - rebuilt from source + data/chroma_db/
+# on every deploy, never meant to be committed
+deploy/package/
+deploy/frontend.zip
+deploy/sitelogs/
+deploy/sitelogs.zip
