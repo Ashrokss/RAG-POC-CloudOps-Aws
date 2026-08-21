@@ -85,3 +85,13 @@ def test_retrieve_only_never_returns_more_than_k(
 
     assert len(docs) <= k
     assert len({doc.metadata["chunk_id"] for doc in docs}) == len(docs)
+
+
+def test_keyword_strategy_needs_no_vector_store() -> None:
+    # It is BM25 over the chunk list. Requiring a Chroma handle made an
+    # embedding-model mismatch break the one strategy with no embeddings.
+    retriever = get_retriever("keyword", None, _wide_corpus(), k=3)
+
+    results = retriever.invoke(_QUERY)
+
+    assert 0 < len(results) <= 3

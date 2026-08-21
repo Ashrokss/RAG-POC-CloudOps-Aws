@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
-from rag.chain.grounding import check_grounding, count_by_kind
+from rag.chain.grounding import check_grounding, count_by_kind, outside_knowledge_lines
 
 
 def _docs() -> list[Document]:
@@ -73,3 +73,27 @@ def test_incident_id_digits_do_not_ground_themselves() -> None:
     counts = count_by_kind(check_grounding(answer, _docs()))
 
     assert counts["number"] == 1
+
+
+def test_outside_knowledge_section_is_not_grounding_checked() -> None:
+    # The section is declared as ungrounded; checking it would flag every
+    # sentence of an answer that was honest about where it came from.
+    answer = (
+        "INC-2025-1002 delayed the reconciler 84 minutes.\n\n"
+        "### GENERAL KNOWLEDGE (NOT FROM THIS CORPUS) ###\n\n"
+        "IAM trust policies typically propagate within 30 seconds, and a wildcard\n"
+        "principal is flagged by most CSPM tools within 24 hours."
+    )
+
+    assert check_grounding(answer, _docs()) == []
+    assert outside_knowledge_lines(answer) == 2
+
+
+def test_claims_above_the_marker_are_still_checked() -> None:
+    answer = (
+        "INC-2025-1002 occurred on 30 May.\n\n"
+        "### GENERAL KNOWLEDGE (NOT FROM THIS CORPUS) ###\n\n"
+        "Trust policy changes are a common regression source."
+    )
+
+    assert count_by_kind(check_grounding(answer, _docs()))["date"] == 1

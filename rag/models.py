@@ -87,6 +87,10 @@ class RAGAnswer(BaseModel):
     # it came from the complete incident index, the okf/ dependency graph, or
     # k retrieved chunks.
     route: Literal["retrieval", "aggregate", "blast_radius"] = "retrieval"
+    # True when the answer carries a general-knowledge section. Surfaced for
+    # the same reason as route: a reader deciding whether to act on an answer
+    # needs to know part of it rests on nothing in this corpus.
+    used_outside_knowledge: bool = False
     run_id: str = Field(default_factory=_new_uuid4)
     generated_at: datetime = Field(default_factory=_utc_now)
 

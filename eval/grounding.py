@@ -12,6 +12,14 @@ from rag.chain.grounding import (
     INCIDENT_RE,
     check_grounding,
     count_by_kind,
+    outside_knowledge_lines,
+    split_outside_knowledge,
 )
 
-__all__ = ["INCIDENT_RE", "check_grounding", "count_by_kind"]
+__all__ = [
+    "INCIDENT_RE",
+    "check_grounding",
+    "count_by_kind",
+    "outside_knowledge_lines",
+    "split_outside_knowledge",
+]

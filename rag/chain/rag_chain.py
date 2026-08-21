@@ -39,8 +39,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.retrievers import BaseRetriever
 
 from config.settings import get_settings
-from rag.chain.grounding import check_grounding
-from rag.chain.prompt import RAG_PROMPT, SOURCE_HEADER_TEMPLATE
+from rag.chain.grounding import check_grounding, split_outside_knowledge
+from rag.chain.prompt import OUTSIDE_KNOWLEDGE_MARKER, RAG_PROMPT, SOURCE_HEADER_TEMPLATE
 from rag.embeddings.factory import get_embeddings
 from rag.ingestion.chunker import chunk_all
 from rag.ingestion.loader import CORPUS_DIRS, load_rca_documents
@@ -92,7 +92,12 @@ def _cached_retriever(strategy: str, k: int) -> BaseRetriever:
     # and the chunk list behind it are fixed for the process's lifetime, and
     # rebuilding BM25 from 233 chunks per call was pure waste - an 88-question
     # eval across 4 strategies paid for it 352 times.
-    return get_retriever(strategy, get_vectorstore(get_embeddings()), _corpus_chunks(), k)
+    #
+    # keyword is pure BM25 over the chunk list and never touches Chroma, so it
+    # must not open the collection: doing so made an embedding-model mismatch
+    # fail the one strategy that has no embeddings to mismatch.
+    vectorstore = None if strategy == "keyword" else get_vectorstore(get_embeddings())
+    return get_retriever(strategy, vectorstore, _corpus_chunks(), k)
 
 
 def reset_corpus_cache() -> None:
@@ -248,7 +253,16 @@ def _find_corrections(
     # the model to "cite every claim... or drop any claim you cannot cite"
     # would push it toward dropping exactly the facts this check exists to
     # keep.
-    if not is_dependency_answer and not citations and INSUFFICIENT_EVIDENCE_PHRASE not in answer.lower():
+    # ...and so is an answer whose substance sits below OUTSIDE_KNOWLEDGE_MARKER:
+    # it is openly labelled as not coming from this corpus, so demanding
+    # citations for it would only pressure the model into citing chunks it
+    # did not use.
+    if (
+        not is_dependency_answer
+        and not citations
+        and INSUFFICIENT_EVIDENCE_PHRASE not in answer.lower()
+        and OUTSIDE_KNOWLEDGE_MARKER not in answer
+    ):
         corrections.append(
             "You did not cite any source chunk. Cite every factual claim using the "
             "[<incident id> · <section>] tag as instructed, or drop any claim you cannot cite."
@@ -294,7 +308,8 @@ def generate(question: str, docs: list[Document], index_block: str = "") -> tupl
     chain = RAG_PROMPT | get_chat_model() | StrOutputParser()
     context = f"{index_block}\n\n{format_docs(docs)}" if index_block else format_docs(docs)
     answer = chain.invoke({"context": context, "question": question})
-    citations = _resolve_citations(answer, docs)
+    grounded_half, _ = split_outside_knowledge(answer)
+    citations = _resolve_citations(grounded_half, docs)
 
     is_dependency_answer = "### DEPENDENCY IMPACT ###" in index_block
     corrections = _find_corrections(answer, citations, docs, index_block, is_dependency_answer)
@@ -304,7 +319,7 @@ def generate(question: str, docs: list[Document], index_block: str = "") -> tupl
             f"- {correction}" for correction in corrections
         )
         answer = chain.invoke({"context": context, "question": retry_question})
-        citations = _resolve_citations(answer, docs)
+        citations = _resolve_citations(split_outside_knowledge(answer)[0], docs)
 
     return answer, citations
 
@@ -333,4 +348,5 @@ def answer_question(question: str, strategy: str = "hybrid", k: int | None = Non
         model_id=model_id,
         mode="mock" if settings.mock_mode else "live",
         route=route,
+        used_outside_knowledge=OUTSIDE_KNOWLEDGE_MARKER in answer,
     )

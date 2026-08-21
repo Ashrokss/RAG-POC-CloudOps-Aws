@@ -7,6 +7,20 @@ QUESTION_MARKER are imported from that module (rather than redefined here)
 so the two literals can't drift apart; SOURCE_HEADER_TEMPLATE is exported
 from here - instead of being duplicated inline in rag_chain.py's
 format_docs - for the same reason.
+
+Outside knowledge is allowed, but quarantined. The system prompt used to
+forbid it outright, which is what made every answer auditable: each sentence
+mapped to a retrieved chunk. Answering RCA questions well needs more than the
+corpus holds (how a NAT gateway allocates ports, what an AWS quota actually
+is), so the rule is now provenance rather than prohibition - anything the
+model knows from outside this corpus goes below a fixed marker, uncited and
+labelled as unverified, and can never appear in the cited section. Internal
+evidence wins on conflict, always: the corpus records what happened here,
+the model recalls what is usually true elsewhere.
+
+The marker is a literal so rag/chain/rag_chain.py can split the answer on it
+and eval/grounding.py can skip grounding-checking a section that is
+grounded in nothing by definition.
 """
 
 from __future__ import annotations
@@ -17,11 +31,17 @@ from rag.llm.mock_chat_model import CONTEXT_MARKER, QUESTION_MARKER
 
 SOURCE_HEADER_TEMPLATE = "[SOURCE: {incident_id} · {section}]"
 
+# Everything after this line in an answer is the model's own knowledge, not
+# this corpus. Parsed by rag_chain (to flag the answer) and by eval/grounding
+# (to score the two halves differently), so it must match byte-for-byte.
+OUTSIDE_KNOWLEDGE_MARKER = "### GENERAL KNOWLEDGE (NOT FROM THIS CORPUS) ###"
+
 _SYSTEM_PROMPT = (
-    "You are an SRE assistant answering questions about past cloud incidents "
-    "using only the root-cause-analysis excerpts supplied in the context "
-    "block below. Never use outside knowledge, and never invent, guess, or "
-    "extrapolate beyond what the excerpts state.\n\n"
+    "You are an SRE assistant answering questions about past cloud incidents. "
+    "Everything you assert about what happened must come from the "
+    "root-cause-analysis excerpts supplied in the context block below. Never "
+    "invent, guess, or extrapolate about this organisation's incidents beyond "
+    "what the excerpts state.\n\n"
     "Each chunk in the context block starts with a line like "
     "'[SOURCE: INC-2024-0007 · Timeline]'. Cite every factual claim inline, "
     "immediately after the sentence it supports, by substituting that "
@@ -60,7 +80,20 @@ _SYSTEM_PROMPT = (
     "that merely sits nearby in the same chunk.\n\n"
     "If the retrieved context does not contain enough information to answer "
     "the question, respond with the exact phrase 'insufficient evidence in "
-    "the retrieved context' instead of fabricating an answer."
+    "the retrieved context' instead of fabricating an answer. A question about "
+    "an incident this corpus does not contain is always that case - general "
+    "knowledge about the technology involved is never a substitute for an "
+    "incident record, and must not be offered as one.\n\n"
+    f"You may add general engineering knowledge that is not in the excerpts - "
+    f"how a service's limits work, what a failure mode usually means, what to "
+    f"check next - but only under a final section introduced by this exact "
+    f"line, on its own:\n\n{OUTSIDE_KNOWLEDGE_MARKER}\n\n"
+    "Rules for that section: it comes last; it carries no "
+    "[<incident id> · <section>] citations, because nothing in this corpus "
+    "supports it; it never restates or reinterprets what the excerpts say; and "
+    "where it disagrees with an excerpt, the excerpt is right and you say so "
+    "explicitly. Omit the section entirely when the excerpts fully answer the "
+    "question - it is for adding mechanism and next steps, not for padding."
 )
 
 _HUMAN_PROMPT = f"{CONTEXT_MARKER}\n{{context}}\n\n{QUESTION_MARKER}\n{{question}}"

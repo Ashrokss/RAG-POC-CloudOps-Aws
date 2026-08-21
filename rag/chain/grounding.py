@@ -28,6 +28,13 @@ incident's text. # ponytail: lexical matcher; an NLI or claim-extraction
 model is the upgrade path if the false-positive rate on prose answers gets
 annoying, or if that adjacent-figure case needs catching too.
 
+Only the corpus-grounded half of an answer is checked. Text below
+prompt.OUTSIDE_KNOWLEDGE_MARKER is the model's own knowledge, declared as
+such, and grounding it against retrieved chunks would flag every sentence of
+a section that is honestly labelled as ungrounded. It is counted separately
+instead (outside_knowledge_lines), so a reviewer can see how far an answer
+leans on it - heavy use is a retrieval gap worth seeing, not a hallucination.
+
 Lives in rag/chain/, not eval/, because rag/chain/rag_chain.py's generate()
 calls check_grounding() directly to decide whether to retry a live answer,
 not only to score one after the fact - the same reason
@@ -41,6 +48,8 @@ import re
 from collections.abc import Sequence
 
 from langchain_core.documents import Document
+
+from rag.chain.prompt import OUTSIDE_KNOWLEDGE_MARKER
 
 # Matches both the synthetic ids (INC-2025-0101) and the real-incident ids
 # that carry a trailing slug (INC-2017-0228-S3-USEAST1).
@@ -97,9 +106,23 @@ def _source_text(docs: Sequence[Document], incident_ids: set[str]) -> str:
     return "\n".join(doc.page_content for doc in docs if doc.metadata["incident_id"] in incident_ids)
 
 
+def split_outside_knowledge(answer: str) -> tuple[str, str]:
+    """(corpus-grounded half, outside-knowledge half). The second is empty when
+    the model added no general-knowledge section."""
+    marker_at = answer.find(OUTSIDE_KNOWLEDGE_MARKER)
+    if marker_at == -1:
+        return answer, ""
+    return answer[:marker_at].rstrip(), answer[marker_at + len(OUTSIDE_KNOWLEDGE_MARKER) :].strip()
+
+
+def outside_knowledge_lines(answer: str) -> int:
+    return len([line for line in split_outside_knowledge(answer)[1].splitlines() if line.strip()])
+
+
 def check_grounding(answer: str, docs: Sequence[Document]) -> list[dict]:
     """Violations, one dict per unsupported claim. Empty list = every date and
     figure stated beside an incident id appears in that incident's text."""
+    answer, _outside = split_outside_knowledge(answer)
     retrieved_ids = {doc.metadata["incident_id"] for doc in docs}
     violations: list[dict] = []
 

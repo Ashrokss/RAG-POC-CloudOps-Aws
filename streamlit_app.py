@@ -23,7 +23,7 @@ import streamlit as st
 
 from config.settings import get_settings
 from eval.golden_schema import load_golden_questions
-from rag.chain.rag_chain import generate, retrieve_for_question
+from rag.chain.rag_chain import generate, retrieve_for_question, split_outside_knowledge
 from rag.retrieval.factory import STRATEGIES
 
 st.set_page_config(page_title="RAG SRE Agent - Test Console", page_icon="🛠️", layout="wide")
@@ -130,7 +130,16 @@ if st.button("Ask", type="primary", disabled=not question.strip()):
                 "the chosen strategy retrieved for them."
             )
 
-        st.write(_escape_markdown_math(answer))
+        grounded_half, outside_half = split_outside_knowledge(answer)
+        st.write(_escape_markdown_math(grounded_half))
+        if outside_half:
+            # Rendered apart from the cited answer, not appended to it: the
+            # whole point of the marker is that a reader can tell at a glance
+            # which half rests on this corpus and which does not.
+            st.warning(
+                "**General knowledge — not from this corpus, not citable.**\n\n"
+                + _escape_markdown_math(outside_half)
+            )
 
         with st.expander(f"Citations ({len(citations)})"):
             if not citations:

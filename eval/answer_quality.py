@@ -34,7 +34,12 @@ from __future__ import annotations
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
-from rag.chain.grounding import INCIDENT_RE, check_grounding, count_by_kind
+from rag.chain.grounding import (
+    INCIDENT_RE,
+    check_grounding,
+    count_by_kind,
+    outside_knowledge_lines,
+)
 from rag.chain.rag_chain import INSUFFICIENT_EVIDENCE_PHRASE
 from rag.llm.factory import get_chat_model
 from rag.models import Citation, GoldenQuestion
@@ -127,6 +132,11 @@ def adversarial_judge(
     quoted_violations = violation_counts["date"] + violation_counts["unretrieved_incident"]
 
     result: dict = {
+        # Not a penalty: a labelled general-knowledge section is allowed. It is
+        # tracked because an answer that leans on it heavily is a retrieval gap
+        # worth seeing, and because a refusal question answered mostly from
+        # world knowledge is still a failed refusal.
+        "outside_knowledge_lines": outside_knowledge_lines(generated_answer),
         "grounding_violations": len(violations),
         "grounding_date_violations": violation_counts["date"],
         "grounding_number_violations": violation_counts["number"],

@@ -21,7 +21,11 @@ from rag.retrieval.semantic import get_semantic_retriever
 STRATEGIES = ("semantic", "keyword", "hybrid", "hybrid_rerank")
 
 
-def get_retriever(name: str, vectorstore: VectorStore, chunks: list[Document], k: int) -> BaseRetriever:
+def get_retriever(
+    name: str, vectorstore: VectorStore | None, chunks: list[Document], k: int
+) -> BaseRetriever:
+    """vectorstore may be None for the keyword strategy, which is BM25 over the
+    chunk list and never reads the vector store."""
     if name == "semantic":
         return get_semantic_retriever(vectorstore, k)
     if name == "keyword":

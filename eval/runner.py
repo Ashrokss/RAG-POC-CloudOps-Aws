@@ -153,6 +153,7 @@ def _score_one(
         "refusal_correct",
         "required_id_recall",
         "forbidden_id_leak",
+        "outside_knowledge_lines",
         "grounding_violations",
         "grounding_date_violations",
         "grounding_number_violations",
