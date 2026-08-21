@@ -165,7 +165,12 @@ def research(
     ]
 
     card = CandidateCard(
-        candidate_id=stable_id("candidate", gap.gap_id, evidence[0].url),
+        # The claim is part of the id, not just the gap and the source: one
+        # page can support several distinct claims, and keying on (gap, url)
+        # alone made a second card silently overwrite the first. A verified
+        # card was replaced by a rejected one carrying a fabricated quote from
+        # the same URL, with no trace beyond the audit log.
+        candidate_id=stable_id("candidate", gap.gap_id, evidence[0].url, evidence[0].quote),
         gap_id=gap.gap_id,
         claim=evidence[0].quote,
         applies_to=services_in(gap.question),

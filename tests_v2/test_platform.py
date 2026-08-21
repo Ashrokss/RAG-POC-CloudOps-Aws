@@ -460,3 +460,18 @@ def test_aggregate_route_ignores_the_coverage_floor(store: Store, retriever: Ret
     answer = ask(store, retriever, EchoChatModel(), "List every incident involving AWS Lambda")
 
     assert answer.route == "aggregate"
+
+
+def test_two_claims_from_one_page_are_two_candidates(store: Store) -> None:
+    # Keyed on (gap, url) alone, the second card overwrote the first - a
+    # verified card was replaced by a rejected one quoting the same page.
+    gap = gaps.detect(store, "How does BigQuery slot reservation work?", coverage=0.1)
+    url = "https://cloud.google.com/bigquery/docs/reservations-intro"
+
+    first = research.research(store, gap, search=lambda q, l=3: [
+        {"url": url, "title": "Docs", "text": "A reservation assigns a fixed number of slots."}])
+    second = research.research(store, gap, search=lambda q, l=3: [
+        {"url": url, "title": "Docs", "text": "Queries queue when the reservation is fully consumed."}])
+
+    assert first.candidate_id != second.candidate_id
+    assert len(store.candidates()) == 2
