@@ -81,6 +81,20 @@ class Chunk(BaseModel):
     source_tier: SourceTier = "internal"
     services: list[str] = Field(default_factory=list)
 
+    @property
+    def search_text(self) -> str:
+        """What retrieval indexes, as opposed to what a prompt displays.
+
+        A chunk usually does not repeat its own incident id - only 2 of 11
+        chunks of INC-2025-0101 mention it - so a question naming an id could
+        not find the document it names, by either BM25 or embedding. Retrieval
+        answered a question about INC-2025-0101 with INC-2025-1002's root
+        cause, confidently and with a citation, because nothing in the index
+        connected the id to the text. Prefixing the identity fixes both
+        retrievers at once.
+        """
+        return f"[{self.incident_id or self.doc_id} · {self.section}]\n{self.text}"
+
 
 class Retrieved(BaseModel):
     chunk: Chunk

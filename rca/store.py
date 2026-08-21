@@ -17,12 +17,19 @@ it grew a hand-rolled in-memory table alongside. The review queue also wants
 transactions, and the audit log wants to be diffable and durable.
 
 Every write that changes what the system believes goes through `audit()`.
+
+The connection is opened with check_same_thread=False and writes are guarded
+by a lock, because a web front end runs each request on a different thread
+from the one that opened the store - and sqlite3's default thread check
+rejects that outright. Reads rely on SQLite's own serialised threading mode;
+writes take the lock so two concurrent promotions cannot interleave.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -131,13 +138,18 @@ def _blob_to_vec(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
 
 
+class EmbeddingMismatchError(RuntimeError):
+    """The index was built by a different embedder than the one querying it."""
+
+
 class Store:
     def __init__(self, path: str | Path = "data/rca.db") -> None:
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         self.conn.executescript(_SCHEMA)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.commit()
@@ -148,11 +160,12 @@ class Store:
     # ---------- audit ----------
 
     def audit(self, actor: str, action: str, subject_id: str, detail: str = "") -> None:
-        self.conn.execute(
-            "INSERT INTO audit (ts, actor, action, subject_id, detail) VALUES (?,?,?,?,?)",
-            (utc_now().isoformat(), actor, action, subject_id, detail),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO audit (ts, actor, action, subject_id, detail) VALUES (?,?,?,?,?)",
+                (utc_now().isoformat(), actor, action, subject_id, detail),
+            )
+            self.conn.commit()
 
     def audit_trail(self, subject_id: Optional[str] = None) -> list[dict]:
         if subject_id:
@@ -166,30 +179,31 @@ class Store:
     # ---------- docs and chunks ----------
 
     def upsert_doc(self, doc: SourceDoc, ingest_run: str) -> None:
-        self.conn.execute(
-            """INSERT INTO docs (doc_id, source_uri, plane, source_tier, title, body, incident_id,
-                                 date, severity, services, region, status, tags,
-                                 detection_gap_minutes, duration_minutes, cost_usd,
-                                 content_hash, retrieved_at, review_ttl_days, ingest_run)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(doc_id) DO UPDATE SET
-                 source_uri=excluded.source_uri, plane=excluded.plane,
-                 source_tier=excluded.source_tier, title=excluded.title, body=excluded.body,
-                 incident_id=excluded.incident_id, date=excluded.date, severity=excluded.severity,
-                 services=excluded.services, region=excluded.region, status=excluded.status,
-                 tags=excluded.tags, detection_gap_minutes=excluded.detection_gap_minutes,
-                 duration_minutes=excluded.duration_minutes, cost_usd=excluded.cost_usd,
-                 content_hash=excluded.content_hash, retrieved_at=excluded.retrieved_at,
-                 review_ttl_days=excluded.review_ttl_days, ingest_run=excluded.ingest_run""",
-            (
-                doc.doc_id, doc.source_uri, doc.plane, doc.source_tier, doc.title, doc.body,
-                doc.incident_id, doc.date.isoformat() if doc.date else None, doc.severity,
-                _dumps(doc.services), doc.region, doc.status, _dumps(doc.tags),
-                doc.detection_gap_minutes, doc.duration_minutes, doc.cost_usd,
-                doc.content_hash, doc.retrieved_at.isoformat(), doc.review_ttl_days, ingest_run,
-            ),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO docs (doc_id, source_uri, plane, source_tier, title, body, incident_id,
+                                     date, severity, services, region, status, tags,
+                                     detection_gap_minutes, duration_minutes, cost_usd,
+                                     content_hash, retrieved_at, review_ttl_days, ingest_run)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(doc_id) DO UPDATE SET
+                     source_uri=excluded.source_uri, plane=excluded.plane,
+                     source_tier=excluded.source_tier, title=excluded.title, body=excluded.body,
+                     incident_id=excluded.incident_id, date=excluded.date, severity=excluded.severity,
+                     services=excluded.services, region=excluded.region, status=excluded.status,
+                     tags=excluded.tags, detection_gap_minutes=excluded.detection_gap_minutes,
+                     duration_minutes=excluded.duration_minutes, cost_usd=excluded.cost_usd,
+                     content_hash=excluded.content_hash, retrieved_at=excluded.retrieved_at,
+                     review_ttl_days=excluded.review_ttl_days, ingest_run=excluded.ingest_run""",
+                (
+                    doc.doc_id, doc.source_uri, doc.plane, doc.source_tier, doc.title, doc.body,
+                    doc.incident_id, doc.date.isoformat() if doc.date else None, doc.severity,
+                    _dumps(doc.services), doc.region, doc.status, _dumps(doc.tags),
+                    doc.detection_gap_minutes, doc.duration_minutes, doc.cost_usd,
+                    doc.content_hash, doc.retrieved_at.isoformat(), doc.review_ttl_days, ingest_run,
+                ),
+            )
+            self.conn.commit()
 
     def replace_chunks(
         self, doc_id: str, chunks: Iterable[Chunk], vectors: Sequence[Sequence[float]], model: str
@@ -198,6 +212,11 @@ class Store:
         whose sections changed must not leave orphaned chunks behind from the
         previous shape of the document."""
         chunks = list(chunks)
+        with self._lock:
+            self._replace_chunks(doc_id, chunks, vectors, model)
+        return len(chunks)
+
+    def _replace_chunks(self, doc_id, chunks, vectors, model) -> None:
         self.conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
         self.conn.executemany(
             """INSERT INTO chunks (chunk_id, doc_id, section, ordinal, text, incident_id,
@@ -212,7 +231,6 @@ class Store:
             ],
         )
         self.conn.commit()
-        return len(chunks)
 
     def embedding_models(self) -> set[str]:
         """More than one model in here means the vectors are not comparable -
@@ -244,6 +262,23 @@ class Store:
             f"SELECT * FROM chunks WHERE plane IN ({marks}) ORDER BY doc_id, ordinal", tuple(planes)
         ).fetchall()
         return [self._row_to_chunk(row) for row in rows]
+
+    def assert_embedding_match(self, model_id: str) -> None:
+        """Refuse to search with an embedder the index was not built by.
+
+        Recording the model is not enough - nothing consulted it, and a 256-dim
+        query against 1536-dim vectors surfaced as a numpy matmul error from
+        three frames deep. Worse is the case where the dimensions happen to
+        agree: the search then returns confident nonsense with no error at all.
+        """
+        built_with = self.embedding_models()
+        if not built_with or built_with == {model_id}:
+            return
+        raise EmbeddingMismatchError(
+            f"index was built with {sorted(built_with)} but this process embeds queries with "
+            f"{model_id!r}. Vectors from different models are not comparable. Re-run "
+            "`python -m rca.cli ingest --reset` with the provider you intend to query with."
+        )
 
     def search_vectors(
         self, query_vector: Sequence[float], k: int, planes: Sequence[str] = ("evidence", "concept")
@@ -284,6 +319,10 @@ class Store:
     def record_gap(self, gap: KnowledgeGap) -> KnowledgeGap:
         """Same question asked twice is one gap with a hit count, not two rows -
         the count is the prioritisation signal for which gap to research first."""
+        with self._lock:
+            return self._record_gap(gap)
+
+    def _record_gap(self, gap: KnowledgeGap) -> KnowledgeGap:
         existing = self.conn.execute(
             "SELECT * FROM gaps WHERE gap_id = ?", (gap.gap_id,)
         ).fetchone()
@@ -331,32 +370,34 @@ class Store:
         return [self._row_to_gap(row) for row in rows]
 
     def set_gap_status(self, gap_id: str, status: str) -> None:
-        self.conn.execute("UPDATE gaps SET status = ? WHERE gap_id = ?", (status, gap_id))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("UPDATE gaps SET status = ? WHERE gap_id = ?", (status, gap_id))
+            self.conn.commit()
 
     # ---------- candidates ----------
 
     def save_candidate(self, card: CandidateCard) -> None:
-        self.conn.execute(
-            """INSERT INTO candidates (candidate_id, gap_id, claim, applies_to, failure_mode,
-                                       evidence, confidence, status, verdict, created_at,
-                                       reviewed_by, review_reason)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(candidate_id) DO UPDATE SET
-                 claim=excluded.claim, applies_to=excluded.applies_to,
-                 failure_mode=excluded.failure_mode, evidence=excluded.evidence,
-                 confidence=excluded.confidence, status=excluded.status,
-                 verdict=excluded.verdict, reviewed_by=excluded.reviewed_by,
-                 review_reason=excluded.review_reason""",
-            (
-                card.candidate_id, card.gap_id, card.claim, _dumps(card.applies_to),
-                card.failure_mode, _dumps([e.model_dump() for e in card.evidence]),
-                card.confidence, card.status,
-                card.verdict.model_dump_json() if card.verdict else None,
-                card.created_at.isoformat(), card.reviewed_by, card.review_reason,
-            ),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO candidates (candidate_id, gap_id, claim, applies_to, failure_mode,
+                                           evidence, confidence, status, verdict, created_at,
+                                           reviewed_by, review_reason)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(candidate_id) DO UPDATE SET
+                     claim=excluded.claim, applies_to=excluded.applies_to,
+                     failure_mode=excluded.failure_mode, evidence=excluded.evidence,
+                     confidence=excluded.confidence, status=excluded.status,
+                     verdict=excluded.verdict, reviewed_by=excluded.reviewed_by,
+                     review_reason=excluded.review_reason""",
+                (
+                    card.candidate_id, card.gap_id, card.claim, _dumps(card.applies_to),
+                    card.failure_mode, _dumps([e.model_dump() for e in card.evidence]),
+                    card.confidence, card.status,
+                    card.verdict.model_dump_json() if card.verdict else None,
+                    card.created_at.isoformat(), card.reviewed_by, card.review_reason,
+                ),
+            )
+            self.conn.commit()
 
     def _row_to_candidate(self, row: sqlite3.Row) -> CandidateCard:
         return CandidateCard(

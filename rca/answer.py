@@ -16,7 +16,7 @@ from rca import gaps
 from rca.models import Answer, Chunk
 from rca.providers import ChatModel
 from rca.retrieve import Retriever
-from rca.router import classify
+from rca.router import COVERAGE_FLOOR, classify
 from rca.store import Store
 
 SYSTEM_PROMPT = (
@@ -89,11 +89,21 @@ def ask(store: Store, retriever: Retriever, chat: ChatModel, question: str, k: i
     citations = resolve_citations(text, result.chunks)
 
     # Gap detection runs after generation so the model's own refusal counts as
-    # a signal, but not on the aggregate route - the index answers those by
-    # construction, and a low chunk score there means nothing.
-    gap = None
-    if route != "aggregate":
-        gap = gaps.detect(store, question, result.coverage, text, citations=len(citations))
+    # a signal. On the aggregate route the coverage floor is disabled - the
+    # index answers those by construction, so a low chunk score means nothing -
+    # but refusal and unknown entities still open a gap there. "How many
+    # connections does a Hyperplane ENI support" matches the aggregate regex
+    # and is nothing of the sort; suppressing the whole detector on that route
+    # meant the one question the corpus genuinely could not answer was the one
+    # that never got recorded.
+    gap = gaps.detect(
+        store,
+        question,
+        result.coverage,
+        text,
+        citations=len(citations),
+        floor=0.0 if route == "aggregate" else COVERAGE_FLOOR,
+    )
 
     return Answer(
         question=question,

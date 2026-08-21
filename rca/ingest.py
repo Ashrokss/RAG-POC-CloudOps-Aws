@@ -99,6 +99,13 @@ def _split_size(text: str, size: int, overlap: int) -> list[str]:
             if cut > size // 2:
                 window = window[:cut]
 
+        # A continuation window starts wherever the previous one ended, which
+        # is mid-token as often as not - "connection-count" arrived as
+        # "n-count" and the model quoted it back that way. Drop the partial
+        # leading word; the overlap means nothing is lost.
+        if start > 0 and " " in window:
+            window = window[window.index(" ") + 1 :]
+
         stripped = window.strip()
         if stripped:
             parts.append(stripped)
@@ -139,7 +146,8 @@ def ingest_doc(store: Store, doc: SourceDoc, embedder: Embedder, ingest_run: str
     chunks = chunk_doc(doc)
     if not chunks:
         return 0
-    vectors = embedder.embed([c.text for c in chunks])
+    # search_text, not text: the chunk's identity has to be embedded with it.
+    vectors = embedder.embed([c.search_text for c in chunks])
     store.replace_chunks(doc.doc_id, chunks, vectors, embedder.model_id)
     store.audit("ingest", "doc_indexed", doc.doc_id, f"{len(chunks)} chunks from {doc.source_uri}")
     return len(chunks)

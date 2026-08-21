@@ -47,6 +47,9 @@ class Retriever:
     def __init__(self, store: Store, embedder: Embedder) -> None:
         self.store = store
         self.embedder = embedder
+        # Fail here, at construction, rather than three frames into numpy on
+        # the first query.
+        store.assert_embedding_match(embedder.model_id)
         self._bm25: BM25Okapi | None = None
         self._bm25_chunks: list[Chunk] = []
 
@@ -56,7 +59,7 @@ class Retriever:
         # 88 questions x 4 strategies paid for it 352 times.
         if self._bm25 is None:
             self._bm25_chunks = self.store.all_chunks()
-            self._bm25 = BM25Okapi([tokenize(c.text) for c in self._bm25_chunks] or [[""]])
+            self._bm25 = BM25Okapi([tokenize(c.search_text) for c in self._bm25_chunks] or [[""]])
         return self._bm25, self._bm25_chunks
 
     def invalidate(self) -> None:

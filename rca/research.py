@@ -17,6 +17,7 @@ paste chunks into the search box" is not a control.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Callable, Protocol
 
 from rca.models import CandidateCard, Evidence, KnowledgeGap, stable_id
@@ -67,6 +68,61 @@ def offline_search(query: str, limit: int = 3) -> list[dict]:
     without inventing an answer - the correct offline behaviour for a component
     whose entire job is to fetch facts it does not have."""
     return []
+
+
+MIRROR_DIR = Path(__file__).resolve().parents[1] / "data" / "reference"
+
+
+def mirror_search(query: str, limit: int = 3, mirror_dir: Path | None = None) -> list[dict]:
+    """Search a local mirror of vendor documentation instead of the live web.
+
+    This is the cheapest backend that actually works: no API key, no per-query
+    cost, no outbound request at answer time, and the pages are curated rather
+    than whatever a search engine ranked today. Each file keeps the URL it came
+    from in frontmatter, so a promoted card still cites the real source, and
+    `mirror_fetch` can serve the same bytes back to the verifier for the
+    verbatim-quote check.
+
+    The trade-off is coverage: the mirror only knows what someone put in it. A
+    paid search API is the upgrade, and slots into the same SearchFn signature.
+    """
+    import frontmatter
+
+    mirror_dir = mirror_dir or MIRROR_DIR
+    if not mirror_dir.exists():
+        return []
+
+    terms = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2}
+    scored: list[tuple[int, dict]] = []
+    for path in sorted(mirror_dir.glob("*.md")):
+        meta, body = frontmatter.parse(path.read_text(encoding="utf-8"))
+        # Score paragraphs, not whole documents: the quote a card carries has
+        # to be a passage the verifier can find, not a page-sized blob.
+        for para in [p.strip() for p in body.split("\n\n") if len(p.strip()) > 120]:
+            hits = sum(1 for term in terms if term in para.lower())
+            if hits:
+                scored.append((hits, {
+                    "url": str(meta.get("source_url") or path.as_posix()),
+                    "title": str(meta.get("title") or path.stem),
+                    "text": para,
+                    "_path": path.as_posix(),
+                }))
+
+    scored.sort(key=lambda item: -item[0])
+    return [doc for _, doc in scored[:limit]]
+
+
+def mirror_fetch(url: str, mirror_dir: Path | None = None) -> str:
+    """Serve the mirrored page back for verification. The verifier must read the
+    source, not the card - otherwise it is checking a claim against itself."""
+    import frontmatter
+
+    mirror_dir = mirror_dir or MIRROR_DIR
+    for path in sorted(mirror_dir.glob("*.md")):
+        meta, body = frontmatter.parse(path.read_text(encoding="utf-8"))
+        if str(meta.get("source_url")) == url or path.as_posix() == url:
+            return body
+    return ""
 
 
 _AUTHORITY_BY_HOST = {

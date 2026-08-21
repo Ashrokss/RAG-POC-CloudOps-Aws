@@ -375,3 +375,88 @@ def test_citations_do_not_excuse_an_unknown_incident(store: Store) -> None:
                       answer="It was a database failure [INC-2025-0101 · Root Cause]", citations=1)
 
     assert gap is not None and gap.reason == "unknown_entity"
+
+
+def test_store_survives_use_from_another_thread(tmp_path: Path) -> None:
+    # A web front end runs each request on a different thread from the one that
+    # opened the store. sqlite3's default thread check rejects that outright,
+    # which no single-threaded test could ever surface - the deployed page hit
+    # it on first render.
+    import threading
+
+    s = Store(tmp_path / "threads.db")
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            s.audit("worker", "ping", "subject")
+            s.counts()
+        except Exception as exc:  # pragma: no cover - the assertion reports it
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    assert not errors, errors
+    assert any(row["action"] == "ping" for row in s.audit_trail())
+
+
+def test_a_question_naming_an_incident_retrieves_that_incident(retriever: Retriever) -> None:
+    # Most chunks never repeat their own incident id, so without the identity
+    # prefix in search_text this question retrieved a different incident
+    # entirely - and the model answered it, with a citation, confidently wrong.
+    top = retriever.keyword("What was the root cause of INC-2025-0101?", 3)
+
+    assert top and top[0].chunk.incident_id == "INC-2025-0101"
+
+
+def test_continuation_windows_do_not_start_mid_word() -> None:
+    # "connection-count scaling" was retrieved and quoted as "n-count scaling".
+    text = " ".join(f"token{i}" for i in range(400))
+    parts = _split_size(text, 300, 60)
+
+    assert all(p.split()[0].startswith("token") for p in parts)
+    assert all(p.split()[-1].startswith("token") for p in parts)
+
+
+def test_querying_with_the_wrong_embedder_fails_immediately(store: Store) -> None:
+    # The store is built with the hash embedder; pretend a process wired to a
+    # real Azure deployment points at it. Without this check the failure was a
+    # numpy matmul error deep in search_vectors - and if the two models had
+    # happened to share a dimension, no error at all.
+    from rca.store import EmbeddingMismatchError
+
+    class OtherEmbedder:
+        model_id = "azure:text-embedding-3-small"
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] * 1536 for _ in texts]
+
+    with pytest.raises(EmbeddingMismatchError, match="not comparable"):
+        Retriever(store, OtherEmbedder())
+
+
+def test_a_refusal_on_the_aggregate_route_still_opens_a_gap(store: Store, retriever: Retriever) -> None:
+    # "How many connections does a Hyperplane ENI support" matches the
+    # aggregate regex and is nothing of the sort. Suppressing gap detection for
+    # the whole route meant the questions the corpus genuinely cannot answer
+    # were the ones that never got recorded.
+    class Refuser:
+        model_id = "stub:refuser"
+
+        def complete(self, system: str, user: str) -> str:
+            return "insufficient evidence in the retrieved context"
+
+    answer = ask(store, retriever, Refuser(), "How many connections does a Hyperplane ENI support?")
+
+    assert answer.route == "gap" and answer.gap_id
+    assert store.get_gap(answer.gap_id).reason == "refused"
+
+
+def test_aggregate_route_ignores_the_coverage_floor(store: Store, retriever: Retriever) -> None:
+    # The incident index answers these by construction, so a low chunk score
+    # must not be read as "the corpus does not know".
+    answer = ask(store, retriever, EchoChatModel(), "List every incident involving AWS Lambda")
+
+    assert answer.route == "aggregate"
