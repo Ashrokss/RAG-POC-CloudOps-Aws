@@ -17,3 +17,6 @@ deploy/package/
 deploy/frontend.zip
 deploy/sitelogs/
 deploy/sitelogs.zip
+
+# v2 platform artefacts
+data/rca.db
