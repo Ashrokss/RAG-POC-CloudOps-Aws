@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from rca import gaps, research, review
+from rca import failure_pattern, gaps, research, review
 from rca.answer import ask, format_context, format_incident_index, resolve_citations
 from rca.ingest import _split_size, chunk_doc, ingest_dirs, markdown_adapter
-from rca.models import Chunk
+from rca.models import Chunk, Retrieved
 from rca.providers import EchoChatModel, HashEmbedder
-from rca.retrieve import Retriever
+from rca.retrieve import RetrievalResult, Retriever
 from rca.router import classify, is_gap
 from rca.store import Store
 from rca.verify import verify
@@ -120,6 +120,103 @@ def test_citations_resolve_only_against_retrieved_chunks() -> None:
     )
 
     assert resolved == ["INC-2025-0101 · Root Cause"]
+
+
+# ---------- known pattern ----------
+
+
+def test_two_agreeing_incidents_match_a_known_pattern() -> None:
+    # Real okf/failure-modes/quota-exhaustion.md incident_ids, on purpose -
+    # the matcher reads real curated content, not a fixture standing in for it.
+    chunks = [
+        Chunk(chunk_id="c1", doc_id="d1", section="Root Cause", ordinal=0, text="x",
+              incident_id="INC-2025-0201"),
+        Chunk(chunk_id="c2", doc_id="d2", section="Root Cause", ordinal=0, text="y",
+              incident_id="INC-2025-0902"),
+    ]
+
+    match = failure_pattern.match_known_pattern(chunks)
+
+    assert match == {
+        "failure_mode_id": "quota-exhaustion",
+        "matched_incident_ids": ["INC-2025-0201", "INC-2025-0902"],
+    }
+
+
+def test_a_single_incident_is_not_a_pattern() -> None:
+    # quota-exhaustion has 3 documented incidents, but one retrieved incident
+    # is a coincidence, not a recurrence - by construction, this can never match.
+    chunks = [Chunk(chunk_id="c1", doc_id="d1", section="Root Cause", ordinal=0, text="x",
+                    incident_id="INC-2025-0201")]
+
+    assert failure_pattern.match_known_pattern(chunks) is None
+
+
+def test_incidents_disagreeing_on_failure_mode_do_not_match() -> None:
+    # INC-2025-0201 is quota-exhaustion's; INC-2025-0101 is
+    # connection-pool-exhaustion's only documented incident. Neither failure
+    # mode reaches two agreeing incidents from this pair.
+    chunks = [
+        Chunk(chunk_id="c1", doc_id="d1", section="Root Cause", ordinal=0, text="x",
+              incident_id="INC-2025-0201"),
+        Chunk(chunk_id="c2", doc_id="d2", section="Root Cause", ordinal=0, text="y",
+              incident_id="INC-2025-0101"),
+    ]
+
+    assert failure_pattern.match_known_pattern(chunks) is None
+
+
+class _ExplodingChatModel:
+    """Generation must never run on a known_pattern match. A call-count
+    assertion after the fact is a tautology if nothing ever calls this stub
+    for another reason; raising from inside complete() is the real guard -
+    if ask() ever falls through to generation on a match, this test fails
+    for that reason specifically, not by silently passing."""
+
+    model_id = "stub:should-not-be-called"
+
+    def complete(self, system: str, user: str) -> str:
+        raise AssertionError("chat.complete() must not be called on a known_pattern match")
+
+
+def test_a_recurring_pattern_skips_generation_entirely(
+    store: Store, retriever: Retriever, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    matched_chunks = [
+        Chunk(chunk_id="c1", doc_id="d1", section="Root Cause", ordinal=0, text="x",
+              incident_id="INC-2025-0201"),
+        Chunk(chunk_id="c2", doc_id="d2", section="Root Cause", ordinal=0, text="y",
+              incident_id="INC-2025-0902"),
+    ]
+    monkeypatch.setattr(
+        retriever,
+        "hybrid",
+        lambda question, k: RetrievalResult(
+            hits=[Retrieved(chunk=c, score=0.9) for c in matched_chunks], coverage=0.9
+        ),
+    )
+
+    answer = ask(store, retriever, _ExplodingChatModel(), "We keep running out of subnet IPs during scale-out")
+
+    assert answer.route == "known_pattern"
+    assert answer.model_id == "none (matched known pattern)"
+    assert answer.gap_id is None
+    assert answer.citations
+
+
+def test_a_novel_question_still_calls_the_chat_model(store: Store, retriever: Retriever) -> None:
+    calls: list[int] = []
+
+    class Counting:
+        model_id = "stub:counting"
+
+        def complete(self, system: str, user: str) -> str:
+            calls.append(1)
+            return "insufficient evidence in the retrieved context"
+
+    ask(store, retriever, Counting(), "What was the root cause of INC-2025-0101?")
+
+    assert calls == [1]
 
 
 # ---------- gaps ----------

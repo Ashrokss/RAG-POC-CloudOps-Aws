@@ -25,7 +25,7 @@ Plane = Literal["evidence", "concept", "candidate"]
 SourceTier = Literal["internal", "reference", "web"]
 GapStatus = Literal["open", "researching", "candidate", "resolved", "abandoned"]
 CandidateStatus = Literal["draft", "ai_verified", "ai_rejected", "approved", "rejected", "promoted"]
-Route = Literal["retrieval", "aggregate", "gap"]
+Route = Literal["retrieval", "aggregate", "gap", "known_pattern"]
 
 
 def utc_now() -> datetime:

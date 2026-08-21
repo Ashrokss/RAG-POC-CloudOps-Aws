@@ -120,3 +120,33 @@ playbook in both directions. The dependency graph (`depends_on`) is also now con
 the blast_radius route above rather than by ingestion - unlike `aliases`, which ingestion
 needs for every document, `depends_on` is read only when a question actually asks a
 dependency question.
+
+## RCA Platform v2 (`rca/`): a second, parallel pipeline
+
+`rca/` is a separate answer pipeline from everything above - its own router, retriever,
+store and models (`rca/router.py`, `rca/retrieve.py`, `rca/store.py`, `rca/models.py`),
+served by `pages/2_RCA_Platform_v2.py`. It is not a rewrite of `rag/`; it adds a
+gap-driven learning loop (`rca/gaps.py` -> `rca/research.py` -> `rca/verify.py` ->
+`rca/review.py`) that `rag/` has no equivalent of - a question the corpus cannot answer
+opens a `KnowledgeGap` rather than being answered from guesswork, and only a named human
+promotes researched knowledge back into the retrievable corpus.
+
+`rca/router.py::classify()` decides **aggregate** vs plain **retrieval** the same way
+`rag/`'s router does (a pre-retrieval regex over count/rank/total phrasing). **gap** is a
+third, post-generation outcome: `rca/answer.py::ask()` calls `gaps.detect()` after the chat
+model responds, so a model's own refusal counts as a signal alongside low retrieval
+coverage and questions naming an unknown incident id.
+
+**known_pattern** is a fourth route, decided after retrieval but *before* generation - the
+same short-circuit as `rag/`'s known_pattern route (see above), reimplemented against
+`rca/`'s own types rather than shared code between the two pipelines. `rca/failure_pattern.py`
+mirrors `rca/vocabulary.py`'s pattern (a cached loader over frontmatter) to build an
+`incident_id -> {failure_mode_id}` map, but reads it from `okf/failure-modes/*.md` rather
+than from `rca/`'s own `knowledge/` tree: `knowledge/services/*.md` already links to
+`knowledge/failure-modes/*.md` and `knowledge/playbooks/*.md`, but those files don't exist
+yet, and both pipelines ingest the same `data/raw_rca_docs/` incident corpus, so an
+incident id retrieved by `rca/` matches one declared in `okf/failure-modes/*.md` as-is.
+When 2+ distinct retrieved incidents agree on one failure mode, `ask()` returns the matched
+`okf/playbooks/*.md` content directly - `model_id="none (matched known pattern)"` - and
+never calls `chat.complete()` or `gaps.detect()` for that answer: a matched pattern is a
+confident, corpus-backed answer, not an absence.

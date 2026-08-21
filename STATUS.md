@@ -46,6 +46,7 @@ proportionally larger cost.
 | T6 | okf/ failure-modes + playbooks + blast_radius routing | Every service->failure-mode link resolves, each has a remediation runbook, and "what else breaks if X is down" is answerable from the depends_on graph |
 | T7 | blast_radius routing-regex fix + a generate()-level grounding retry | The dependency-impact route now actually triggers on natural phrasings; hallucinated incident-id/date claims get one automatic self-correction pass instead of shipping uncaught |
 | — | Embedding-provenance guard | A mismatched index fails with one clear message instead of a Chroma dimension error per strategy |
+| T8 | `rca/` known_pattern routing (RCA Platform v2) | A recurring failure (2+ retrieved incidents sharing one `okf/failure-modes/` entry) is answered from the existing playbook with zero chat-model calls, instead of re-deriving the same analysis every time |
 
 ### T1 — cap every strategy at k
 `EnsembleRetriever` fuses two k-wide rankings by RRF and truncates nothing, so `hybrid` returned
@@ -221,6 +222,33 @@ independent of it: the citation retry in `generate()` no longer fires for a `###
 `check_dependency_completeness()` (`rag/routing/dependency_graph.py`) triggers one retry naming
 exactly what's missing if a model ever does drop a listed service for a different reason. Both are
 unit-tested with a scripted stub model, not just live spot-checks.
+
+### T8 — `rca/` known_pattern routing (RCA Platform v2)
+Note: unlike T1-T7 above, this is the `rca/` pipeline (`pages/2_RCA_Platform_v2.py`), not `rag/` -
+a separate, parallel answer path, not a change to the Test Console. `rag/` already gained this same
+short-circuit on a sibling branch; `rca/` had no equivalent and diverged before that work landed, so
+this reimplements the same logic against `rca/`'s own types rather than sharing code between the
+two pipelines.
+
+New module `rca/failure_pattern.py` mirrors `rca/vocabulary.py`'s cached-frontmatter-loader pattern,
+but reads `okf/failure-modes/*.md` rather than `rca/`'s own `knowledge/` tree: `knowledge/services/
+*.md` already links to `knowledge/failure-modes/*.md` and `knowledge/playbooks/*.md`, but those
+files don't exist yet, and both pipelines ingest the same `data/raw_rca_docs/` corpus, so an
+incident id `rca/` retrieves matches one `okf/failure-modes/*.md` already declares. `rca/answer.py
+::ask()` now checks for a match right after retrieval (2+ distinct retrieved incidents agreeing on
+one failure mode) and, on a match, returns the matched `okf/playbooks/*.md` content directly -
+`route="known_pattern"`, `model_id="none (matched known pattern)"` - skipping both `chat.complete()`
+and `gaps.detect()` entirely for that answer.
+
+Tested: 3 new matcher unit tests against real `okf/failure-modes/*.md` data (2 agreeing incidents
+-> match; 1 incident or disagreement -> no match), plus an `ask()`-level test with a chat stub that
+raises if called - confirmed to actually fail if the short-circuit is removed, not a tautology - and
+a regression test that a novel question still calls the chat model normally. Full `tests_v2/` suite:
+52/52 passing. Verified locally in mock mode (`python -m rca.cli ask "..."`, `HashEmbedder` +
+`EchoChatModel`): a symptom description naming no incident id correctly returns `route=known_pattern`
+in 90ms citing the real matched incidents (`INC-2025-0201`, `INC-2025-0902`), with the other three
+routes unaffected. **Not yet verified against the live Azure-deployed instance** - that needs a
+redeploy first, which this pass deliberately did not do.
 
 ---
 

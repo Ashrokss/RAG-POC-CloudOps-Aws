@@ -88,6 +88,13 @@ with ask_tab:
                 f"**Knowledge gap opened** (`{answer.gap_id}`). The corpus cannot answer this. "
                 "It is now queued for research rather than answered from guesswork."
             )
+        elif answer.route == "known_pattern":
+            st.info(
+                "**Known-pattern route** — retrieval matched 2+ past incidents already "
+                "catalogued under one `okf/failure-modes/` entry, so this answer is that "
+                "failure mode's existing playbook, not a fresh analysis. No chat model call "
+                "was made for this answer."
+            )
         st.write(_escape(answer.answer))
         if answer.citations:
             st.caption("Citations: " + ", ".join(f"`{c}`" for c in answer.citations))
