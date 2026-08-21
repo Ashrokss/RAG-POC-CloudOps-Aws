@@ -90,7 +90,9 @@ def approve(
         source_uri=path.as_posix(),
         plane="concept",
         source_tier="reference",
-        title=card.claim[:120],
+        # Titled by its source, not by the first 120 characters of the claim:
+        # the title becomes the citation a reader sees.
+        title=(card.evidence[0].title if card.evidence else card.claim)[:80],
         body=render_card(card, actor).split("---", 2)[-1],
         services=card.applies_to,
         review_ttl_days=DEFAULT_TTL_DAYS,

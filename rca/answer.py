@@ -20,24 +20,37 @@ from rca.router import COVERAGE_FLOOR, classify
 from rca.store import Store
 
 SYSTEM_PROMPT = (
-    "You are an SRE assistant answering questions about past cloud incidents. "
-    "Everything you assert about what happened must come from the excerpts "
-    "below. Each excerpt starts with a line like '[SOURCE: INC-2025-0101 · Root Cause]'; "
-    "cite every factual claim inline with that chunk's own tag, e.g. "
-    "[INC-2025-0101 · Root Cause]. The separator is the middle dot (·).\n\n"
+    "You are an SRE assistant. Everything you assert must come from the excerpts "
+    "below. Each excerpt starts with a line like "
+    "'[SOURCE: INC-2025-0101 · Root Cause]'; cite every factual claim inline with "
+    "that chunk's own tag, e.g. [INC-2025-0101 · Root Cause]. The separator is "
+    "the middle dot (·).\n\n"
+    "Excerpts come in two kinds and both are usable:\n"
+    "- INCIDENT RECORDS - what happened in this organisation's own incidents.\n"
+    "- REFERENCE MATERIAL - vendor documentation that a human reviewed and "
+    "approved into the knowledge base. Marked '(reference)' on its SOURCE line. "
+    "Use it to answer how a service behaves or what a limit is, and cite it the "
+    "same way.\n\n"
     "If the excerpts do not contain enough information, reply with exactly "
     "'insufficient evidence in the retrieved context'. A question about an "
-    "incident these excerpts do not cover is always that case - general "
-    "knowledge about the technology is never a substitute for an incident record."
+    "incident these excerpts do not cover is always that case: reference "
+    "material explains how technology behaves and is never a substitute for an "
+    "incident record about what actually happened here."
 )
 
 _CITATION_RE = re.compile(r"\[([^\]·]+)·([^\]]+)\]")
 
 
 def format_context(chunks: list[Chunk]) -> str:
-    return "\n\n".join(
-        f"[SOURCE: {c.incident_id or c.doc_id} · {c.section}]\n{c.text}" for c in chunks
-    )
+    """Reference excerpts are marked on their SOURCE line. Without the marker a
+    promoted vendor-doc card looked like an incident record with an unfamiliar
+    id, and the model refused to use it: retrieval surfaced the approved answer
+    in the top three chunks and the prompt would not let it be spent."""
+    parts = []
+    for c in chunks:
+        marker = " (reference)" if c.source_tier == "reference" else ""
+        parts.append(f"[SOURCE: {c.cite_key} · {c.section}]{marker}\n{c.text}")
+    return "\n\n".join(parts)
 
 
 def format_incident_index(rows: list[dict]) -> str:
@@ -66,7 +79,7 @@ def format_incident_index(rows: list[dict]) -> str:
 
 
 def resolve_citations(answer: str, chunks: list[Chunk]) -> list[str]:
-    available = {f"{c.incident_id or c.doc_id} · {c.section}" for c in chunks}
+    available = {f"{c.cite_key} · {c.section}" for c in chunks}
     found: list[str] = []
     for match in _CITATION_RE.finditer(answer):
         tag = f"{match.group(1).strip()} · {match.group(2).strip()}"

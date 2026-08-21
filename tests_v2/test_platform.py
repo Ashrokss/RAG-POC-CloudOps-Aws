@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from rca import gaps, research, review
-from rca.answer import ask, format_incident_index, resolve_citations
+from rca.answer import ask, format_context, format_incident_index, resolve_citations
 from rca.ingest import _split_size, chunk_doc, ingest_dirs, markdown_adapter
 from rca.models import Chunk
 from rca.providers import EchoChatModel, HashEmbedder
@@ -475,3 +475,55 @@ def test_two_claims_from_one_page_are_two_candidates(store: Store) -> None:
 
     assert first.candidate_id != second.candidate_id
     assert len(store.candidates()) == 2
+
+
+def test_reference_excerpts_are_marked_in_the_context() -> None:
+    # A promoted vendor-doc card must not look like an incident record with an
+    # odd id - the model refused to use one when it could not tell them apart.
+    incident = Chunk(chunk_id="c1", doc_id="d1", section="Root Cause", ordinal=0,
+                     text="x", incident_id="INC-2025-0101")
+    card = Chunk(chunk_id="c2", doc_id="d2", section="Claim", ordinal=0, text="y",
+                 plane="concept", source_tier="reference")
+
+    context = format_context([incident, card])
+
+    assert "[SOURCE: INC-2025-0101 · Root Cause]\n" in context
+    assert "(reference)" in context.split("\n\n")[1]
+
+
+def test_quotes_are_cut_on_a_sentence_not_a_character_count() -> None:
+    # A flat 400-char cut sliced "supports up to 65,000 connections" one word
+    # before the number: verified, promoted, retrieved, and still unable to
+    # answer the question it was researched for.
+    from rca.research import _trim_to_sentence
+
+    text = ("First sentence padding. " * 20) + "Each Hyperplane ENI supports up to 65,000 connections."
+    trimmed = _trim_to_sentence(text, limit=200)
+
+    assert trimmed.endswith(".")
+    assert not trimmed.endswith("supports up to")
+
+
+def test_reference_chunks_cite_by_a_readable_label(tmp_path: Path) -> None:
+    # A promoted card cited as "[c440f6df70532859 · Claim]" tells a reader
+    # nothing about where the claim came from.
+    from rca.ingest import doc_label
+    from rca.models import SourceDoc
+
+    doc = SourceDoc(doc_id="abc123", source_uri="knowledge/cards/x.md", plane="concept",
+                    source_tier="reference", title="Lambda VPC Hyperplane ENIs", body="## Claim\n\ntext")
+
+    assert doc_label(doc) == "REF:lambda-vpc-hyperplane-enis"
+    assert doc_label(SourceDoc(doc_id="d", source_uri="u", title="t", body="b",
+                               incident_id="INC-2025-0101")) == "INC-2025-0101"
+
+
+def test_evidence_map_holds_only_fields_that_actually_cite(store: Store, retriever: Retriever) -> None:
+    # An empty citation list in evidence_map reads as "checked and fine" to
+    # every consumer, while the same field is also listed as unsupported.
+    from rca.report import generate_rca
+
+    report = generate_rca(store, retriever, EchoChatModel(), "INC-2025-0101")
+
+    assert all(cites for cites in report.evidence_map.values())
+    assert not set(report.evidence_map) & set(report.unsupported_fields)

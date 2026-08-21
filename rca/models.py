@@ -77,9 +77,17 @@ class Chunk(BaseModel):
     # Denormalised onto the chunk so retrieval can filter without a join, and
     # so a returned chunk is self-describing when it lands in a prompt.
     incident_id: Optional[str] = None
+    # What a citation shows. An incident cites as INC-2025-0101; a promoted
+    # vendor-doc card cited as its doc_id hash, which tells a reader nothing
+    # about where the claim came from.
+    label: str = ""
     plane: Plane = "evidence"
     source_tier: SourceTier = "internal"
     services: list[str] = Field(default_factory=list)
+
+    @property
+    def cite_key(self) -> str:
+        return self.incident_id or self.label or self.doc_id
 
     @property
     def search_text(self) -> str:
@@ -93,7 +101,7 @@ class Chunk(BaseModel):
         connected the id to the text. Prefixing the identity fixes both
         retrievers at once.
         """
-        return f"[{self.incident_id or self.doc_id} · {self.section}]\n{self.text}"
+        return f"[{self.cite_key} · {self.section}]\n{self.text}"
 
 
 class Retrieved(BaseModel):

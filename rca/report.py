@@ -97,7 +97,10 @@ def generate_rca(
             report.unsupported_fields.append(field)
             continue
         setattr(report, field, text)
-        report.evidence_map[field] = resolve_citations(text, chunks)
+        # Only record a field in evidence_map when it actually cites something -
+        # an empty list there reads as "checked and fine" in every consumer.
+        if citations := resolve_citations(text, chunks):
+            report.evidence_map[field] = citations
 
     for field, instruction in _LIST_SECTIONS.items():
         text = _ask_section(chat, context, instruction)
@@ -106,7 +109,8 @@ def generate_rca(
             continue
         items = [line.strip(" -*") for line in text.splitlines() if line.strip()]
         setattr(report, field, items)
-        report.evidence_map[field] = resolve_citations(text, chunks)
+        if citations := resolve_citations(text, chunks):
+            report.evidence_map[field] = citations
 
     report.five_whys = _five_whys(chat, context, report.root_cause, chunks)
     if not report.five_whys:

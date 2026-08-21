@@ -137,6 +137,25 @@ _AUTHORITY_BY_HOST = {
 }
 
 
+QUOTE_LIMIT = 1200
+
+
+def _trim_to_sentence(text: str, limit: int = QUOTE_LIMIT) -> str:
+    """Cut on a sentence boundary, not a character count.
+
+    A flat 400-character cut amputated "Each Hyperplane ENI supports up to
+    65,000 connections/ports" one word before the number - the card was
+    verified, promoted, retrieved into context, and still could not answer the
+    question it was researched for, because the fact had been sliced off.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    cut = max(window.rfind(". "), window.rfind(".\n"))
+    return (window[: cut + 1] if cut > limit // 3 else window).strip()
+
+
 def authority_of(url: str) -> str:
     for host, tier in _AUTHORITY_BY_HOST.items():
         if host in url:
@@ -158,7 +177,7 @@ def research(
             title=r.get("title", ""),
             # The quote is what the verifier re-checks against the fetched
             # page, so it must be copied verbatim, never summarised here.
-            quote=r["text"].strip()[:400],
+            quote=_trim_to_sentence(r["text"]),
             authority=authority_of(r["url"]),  # type: ignore[arg-type]
         )
         for r in results

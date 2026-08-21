@@ -119,6 +119,14 @@ def _split_size(text: str, size: int, overlap: int) -> list[str]:
     return parts
 
 
+def doc_label(doc: SourceDoc) -> str:
+    """Short, human-meaningful citation key for a non-incident document."""
+    if doc.incident_id:
+        return doc.incident_id
+    slug = re.sub(r"[^a-z0-9]+", "-", doc.title.lower()).strip("-")[:40]
+    return f"REF:{slug}" if slug else f"REF:{doc.doc_id[:8]}"
+
+
 def chunk_doc(doc: SourceDoc, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[Chunk]:
     chunks: list[Chunk] = []
     ordinal = 0
@@ -132,6 +140,7 @@ def chunk_doc(doc: SourceDoc, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERL
                     ordinal=ordinal,
                     text=part,
                     incident_id=doc.incident_id,
+                    label=doc_label(doc),
                     plane=doc.plane,
                     source_tier=doc.source_tier,
                     services=doc.services,

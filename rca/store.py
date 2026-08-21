@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     ordinal INTEGER NOT NULL,
     text TEXT NOT NULL,
     incident_id TEXT,
+    label TEXT NOT NULL DEFAULT '',
     plane TEXT NOT NULL,
     source_tier TEXT NOT NULL,
     services TEXT NOT NULL DEFAULT '[]',
@@ -220,12 +221,12 @@ class Store:
         self.conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
         self.conn.executemany(
             """INSERT INTO chunks (chunk_id, doc_id, section, ordinal, text, incident_id,
-                                   plane, source_tier, services, embedding, embedding_model)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                   label, plane, source_tier, services, embedding, embedding_model)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             [
                 (
                     c.chunk_id, c.doc_id, c.section, c.ordinal, c.text, c.incident_id,
-                    c.plane, c.source_tier, _dumps(c.services), _vec_to_blob(v), model,
+                    c.label, c.plane, c.source_tier, _dumps(c.services), _vec_to_blob(v), model,
                 )
                 for c, v in zip(chunks, vectors)
             ],
@@ -252,6 +253,7 @@ class Store:
         return Chunk(
             chunk_id=row["chunk_id"], doc_id=row["doc_id"], section=row["section"],
             ordinal=row["ordinal"], text=row["text"], incident_id=row["incident_id"],
+            label=row["label"] if "label" in row.keys() else "",
             plane=row["plane"], source_tier=row["source_tier"],
             services=json.loads(row["services"]),
         )
