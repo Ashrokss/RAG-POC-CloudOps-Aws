@@ -1,0 +1,159 @@
+# rca/'s live accuracy spot-check - the golden-set equivalent this pipeline
+# never had (see rag/'s data/golden_qa/*.yaml for the pattern this mirrors).
+# 15 questions against the real ingested corpus: 5 designed to trigger
+# known_pattern, 7 plain retrieval (4 direct id lookups, 3 descriptive
+# single-incident), 2 genuinely unanswerable, 1 deliberate near-miss.
+#
+# must_mention is scored as a lowercase substring match against the answer
+# text plus its citations - loose on purpose, this is a spot-check for
+# route/fact correctness, not a golden-set-grade grounding audit.
+
+- id: rca-01
+  question: >-
+    We're seeing Lambda cold starts spike and some invocations failing with
+    ENI limit errors whenever we scale out into a subnet that's nearly out of
+    free IPs. Is this something we've hit before?
+  expected_route: known_pattern
+  must_mention: ["INC-2025-0201", "INC-2025-0902"]
+  notes: >-
+    Targets quota-exhaustion (3 backing incidents). Phrasing steers toward
+    0201 (Lambda) and 0902 (ECS); a live audit found this specific phrasing
+    can retrieval-concentrate on one incident and route to plain retrieval
+    instead - a route miss worth watching, not a bug (the answer given is
+    still factually correct for whichever incident it finds).
+
+- id: rca-02
+  question: >-
+    After a deploy, our ASG/ALB target group starts flapping unhealthy and
+    replacing instances that were actually fine, and it snowballs until we've
+    got barely any healthy capacity left. Have we dealt with this pattern
+    before?
+  expected_route: known_pattern
+  must_mention: ["INC-2025-0402", "INC-2025-0802"]
+  notes: >-
+    Targets health-check-flapping (2 incidents, neither cross-tagged into
+    another qualifying failure mode) - the lowest-ambiguity known_pattern
+    test in the set.
+
+- id: rca-03
+  question: >-
+    One of our API Gateway integrations keeps timing out around 29 seconds
+    whenever the backend has a slow cold start or a throttled dependency
+    behind it. Is this a known issue for us?
+  expected_route: known_pattern
+  must_mention: ["INC-2025-0602", "INC-2025-0102"]
+  notes: Targets timeout (2 incidents). Same route-sensitivity caveat as rca-01.
+
+- id: rca-04
+  question: >-
+    We keep seeing requests get flat-out rejected once we cross some fixed
+    rate ceiling - whether it's an account-level API limit or a downstream
+    service's own request-rate quota - instead of the extra load being
+    queued or scaled. Does that ring a bell from past incidents?
+  expected_route: known_pattern
+  must_mention: ["INC-2025-0601", "INC-2025-0202", "INC-2025-0702", "INC-2025-0302"]
+  notes: >-
+    Targets throttling, the largest bucket (4 incidents). At least 2 of the
+    4 should appear - which ones depends on k=5 retrieval.
+
+- id: rca-05
+  question: >-
+    A Terraform change went in that looked routine and passed review, but it
+    silently dropped or overrode something a downstream system depended on -
+    a policy statement, a trust relationship - and nobody caught it until
+    things started failing after the apply. Have we seen this failure
+    pattern before?
+  expected_route: known_pattern
+  must_mention: ["INC-2025-0301", "INC-2025-1002"]
+  notes: Targets config-regression, worded to avoid pulling in the OOM-flavored 3rd incident.
+
+- id: rca-06
+  question: What was the root cause of INC-2025-0701?
+  expected_route: retrieval
+  must_mention: ["INC-2025-0701", "tenant_id", "partition"]
+  notes: Direct id lookup, hot-partition failure mode (1 backing incident, no known_pattern risk).
+
+- id: rca-07
+  question: Can you pull up the root cause for INC-2017-0131-GITLAB-DB?
+  expected_route: retrieval
+  must_mention: ["INC-2017-0131-GITLAB-DB", "rm -rf", "db1"]
+  notes: Direct id lookup on the real/ corpus, non-INC-2025-* id format.
+
+- id: rca-08
+  question: Give me the summary of INC-2026-0142.
+  expected_route: retrieval
+  must_mention: ["INC-2026-0142", "prod-subnet-payments", "NSG"]
+  notes: >-
+    The confirmed bug this spot-check found: known_pattern fired on two
+    coincidentally co-retrieved OTHER incidents sharing a failure-mode tag,
+    discarding the correct, retrieved answer. Fixed in rca/answer.py::ask() -
+    an explicitly named, retrieved incident now always outranks a
+    coincidental pattern match.
+
+- id: rca-09
+  question: >-
+    What was the root cause of INC-2025-0501, and what was ElastiCache's
+    maxmemory-policy actually doing wrong?
+  expected_route: retrieval
+  must_mention: ["INC-2025-0501", "volatile-lru", "TTL"]
+  notes: Direct id lookup, checks the answer engages the TTL/eviction mechanism specifically.
+
+- id: rca-10
+  question: >-
+    Our CDN and load balancer both went down with TLS handshake failures
+    after a certificate silently failed to renew - what actually broke the
+    renewal?
+  expected_route: retrieval
+  must_mention: ["INC-2025-0801", "CNAME", "renewal"]
+  notes: Descriptive/symptom question, no id named, 1 backing incident.
+
+- id: rca-11
+  question: >-
+    We had a brief burst of Redis connection errors and READONLY errors
+    right during a scheduled maintenance failover - what was actually
+    misconfigured on our end that turned a routine failover into write
+    failures?
+  expected_route: retrieval
+  must_mention: ["INC-2025-0502", "retry_on_timeout", "DNS TTL"]
+  notes: Descriptive/symptom question, no id named, 1 backing incident.
+
+- id: rca-12
+  question: >-
+    What made the 2017 S3 US-EAST-1 outage take over 4 hours to recover from
+    instead of just a few minutes?
+  expected_route: retrieval
+  must_mention: ["INC-2017-0228-S3-USEAST1", "restarted", "years"]
+  notes: Named by year/service, not an id - the natural way an SRE would ask it.
+
+- id: rca-13
+  question: What was the root cause of INC-2025-1101?
+  expected_route: gap
+  must_mention: []
+  notes: >-
+    Invented incident id in a valid-looking format - does not exist in this
+    corpus (synthetic ids run 0101-1002). Deterministic refusal test via
+    rca/gaps.py's unknown_entity check.
+
+- id: rca-14
+  question: >-
+    Our GKE cluster's etcd quorum was lost after a botched control-plane
+    upgrade and leader election wouldn't recover for over an hour - do we
+    have anything on that?
+  expected_route: gap
+  must_mention: []
+  notes: >-
+    No Kubernetes/GKE/etcd content anywhere in this corpus. No id named, so
+    this exercises the low_coverage/refused gap paths rather than
+    unknown_entity.
+
+- id: rca-15
+  question: >-
+    When we scale in and terminate instances, some in-flight requests get
+    cut off with connection resets instead of finishing cleanly - has that
+    happened to us before?
+  expected_route: retrieval
+  must_mention: ["INC-2025-0401", "deregistration_delay"]
+  notes: >-
+    The near-miss test: connection-draining is thematically adjacent to
+    health-check-flapping but has only 1 backing incident, so known_pattern
+    must not fire from it alone.

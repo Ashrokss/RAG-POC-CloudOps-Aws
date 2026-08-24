@@ -159,7 +159,21 @@ def ask(store: Store, retriever: Retriever, chat: ChatModel, question: str, k: i
     # the question text alone (see rca/failure_pattern.py), so it is checked
     # here rather than by classify() - and only for an otherwise ordinary
     # question, not one already headed for the incident index.
-    if route == "retrieval":
+    #
+    # A question naming a specific incident id that was itself retrieved must
+    # always win over a coincidental failure-mode vote among its neighbors: a
+    # live accuracy audit found "summarize INC-2026-0142" answered from an
+    # unrelated config-regression playbook (INC-2025-0301, INC-2025-1002),
+    # because those two happened to also come back in the same top-k and
+    # agreed on a failure mode, even though INC-2026-0142's own chunk was
+    # sitting right there. gaps.INCIDENT_RE is the same id shape rca/gaps.py
+    # already uses to detect an unknown-entity question - reused here to
+    # detect a known one instead.
+    named_ids = {m.upper() for m in gaps.INCIDENT_RE.findall(question)}
+    retrieved_ids = {c.incident_id.upper() for c in result.chunks if c.incident_id}
+    asks_about_a_retrieved_incident = bool(named_ids & retrieved_ids)
+
+    if route == "retrieval" and not asks_about_a_retrieved_incident:
         match = failure_pattern.match_known_pattern(result.chunks)
         if match:
             answer_text, citations = render_known_pattern_answer(match, result.chunks)

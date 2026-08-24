@@ -66,6 +66,9 @@ _AGGREGATE_CHUNKS_PER_INCIDENT = 2
 _AGGREGATE_CHUNK_BUDGET = 30
 _PREFERRED_SECTIONS = ("Summary", "Impact", "Root Cause", "Detection")
 INSUFFICIENT_EVIDENCE_PHRASE = "insufficient evidence in the retrieved context"
+# Matches rca/gaps.py's INCIDENT_RE - both packages ingest the same corpus, so
+# an id shaped like this always means the same thing in either one.
+_NAMED_INCIDENT_RE = re.compile(r"INC-\d{4}-\d{4}(?:-[A-Z0-9-]+)?", re.IGNORECASE)
 
 
 def format_docs(docs: list[Document]) -> str:
@@ -167,6 +170,57 @@ def _supporting_chunks(rows: tuple[dict, ...], already_have: list[Document]) -> 
     return supporting
 
 
+def _widen_for_named_incidents(question: str, docs: list[Document]) -> list[Document]:
+    """Plain top-k retrieval has no guarantee of covering every incident a
+    question names explicitly - two named ids competing for the same k slots
+    can leave one or both out. That is structurally different from an
+    ordinary top-k miss the model should tolerate: the user did not imply an
+    incident, they typed its id. A live accuracy audit found this exact gap
+    causing "insufficient evidence" refusals on 36-55% of cross_document
+    golden questions across all four strategies, at zero recall on two of
+    them for a question naming two incidents retrieval never surfaced both
+    of at once.
+
+    A prior attempt routed this question shape through aggregate ("between X
+    and Y" in rag/routing/router.py's _AGGREGATE_RE) and was reverted - see
+    that module's docstring: aggregate_context's incident index is filtered
+    by service, not by named id, so it solved nothing for a two-incident
+    comparison and just diluted the aggregate regex's precision elsewhere.
+    This instead adds each named incident's own top-ranked chunks directly,
+    the same per-incident lookup-by-id _supporting_chunks already does for
+    aggregate, without touching route or injecting an index block. Only
+    named-id questions are affected: fewer than two named ids leaves docs
+    untouched, since single-id lookups already retrieve reliably."""
+    named_ids = {m.upper() for m in _NAMED_INCIDENT_RE.findall(question)}
+    if len(named_ids) < 2:
+        return docs
+
+    present_ids = {doc.metadata["incident_id"].upper() for doc in docs}
+    missing_ids = named_ids - present_ids
+    if not missing_ids:
+        return docs
+
+    by_incident: dict[str, list[Document]] = {}
+    for chunk in _corpus_chunks():
+        by_incident.setdefault(chunk.metadata["incident_id"].upper(), []).append(chunk)
+
+    seen_chunk_ids = {doc.metadata["chunk_id"] for doc in docs}
+    widened = list(docs)
+    for incident_id in sorted(missing_ids):
+        ranked = sorted(
+            by_incident.get(incident_id, []),
+            key=lambda doc: _PREFERRED_SECTIONS.index(doc.metadata["section"])
+            if doc.metadata["section"] in _PREFERRED_SECTIONS
+            else len(_PREFERRED_SECTIONS),
+        )
+        for chunk in ranked[:_AGGREGATE_CHUNKS_PER_INCIDENT]:
+            if chunk.metadata["chunk_id"] in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(chunk.metadata["chunk_id"])
+            widened.append(chunk)
+    return widened
+
+
 def aggregate_context(question: str, docs: list[Document]) -> tuple[str, list[Document]]:
     """The incident index for this question, plus the retrieved chunks widened
     to cover every incident the index lists."""
@@ -206,6 +260,12 @@ def retrieve_for_question(question: str, strategy: str, k: int) -> tuple[list[Do
             # same graceful downgrade _AGGREGATE_RE's over-triggering already
             # relies on, rather than shipping an empty DEPENDENCY IMPACT block.
             route = "retrieval"
+    if route == "retrieval":
+        # aggregate already gets full incident coverage via its index+
+        # supporting chunks; blast_radius is graph-structural and never
+        # touches docs. Only plain retrieval - where a named-incident
+        # comparison question actually lands - needs this.
+        docs = _widen_for_named_incidents(question, docs)
     return docs, index_block, route
 
 

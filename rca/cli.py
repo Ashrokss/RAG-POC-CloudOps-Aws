@@ -13,6 +13,7 @@ from typing import Optional
 
 import typer
 
+from rca import eval as eval_mod
 from rca import research as research_mod
 from rca import review as review_mod
 from rca.answer import ask as ask_pipeline
@@ -67,6 +68,21 @@ def ask(question: str, k: int = typer.Option(5)) -> None:
             f"\nKnowledge gap opened: {answer.gap_id}\n"
             f"  research it:  python -m rca.cli gaps research {answer.gap_id}"
         )
+
+
+@app.command("eval")
+def eval_cmd(
+    k: int = typer.Option(5),
+    run_label: str = typer.Option("latest", "--run-label", help="Names reports/rca_spotcheck_<label>.md/.json"),
+) -> None:
+    """Live spot-check against data/rca_qa/spotcheck.yaml - see rca/eval.py
+    for what this does and does not cover."""
+    store, retriever, chat = _wired()
+    questions = eval_mod.load_questions()
+    records = eval_mod.run_eval(store, retriever, chat, questions)
+    md_path, json_path = eval_mod.write_reports(records, run_label)
+    typer.echo(eval_mod.build_markdown_report(records))
+    typer.echo(f"\nWrote {md_path} and {json_path}")
 
 
 @gaps_app.command("list")

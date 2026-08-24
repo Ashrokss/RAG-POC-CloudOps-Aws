@@ -13,6 +13,15 @@ predecessor shipped a mock-built index into an app querying with a real model
 and surfaced it as "expecting dimension 256, got 1536", once per strategy, in
 the UI. Worse is when the dimensions happen to match and it returns confident
 nonsense instead.
+
+load_dotenv() runs at import time because this module reads os.getenv()
+directly and rca/ is deliberately independent of rag/'s config.settings (the
+only other place in the repo that loads .env). Without this, a standalone
+`python -m rca.cli ask/ingest/...` - exactly what this project's own docs
+tell you to run - silently fell back to the mock embedder/chat model with no
+warning whenever nothing else had already imported config.settings first in
+the same process. override=False for the same reason config/settings.py
+uses it: never clobber a real env var the shell already set.
 """
 
 from __future__ import annotations
@@ -22,6 +31,10 @@ import math
 import os
 import re
 from typing import Protocol
+
+from dotenv import load_dotenv
+
+load_dotenv(override=False)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 

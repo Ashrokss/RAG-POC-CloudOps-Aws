@@ -5,6 +5,7 @@ data/chroma_db/*
 reports/*.md
 reports/*.csv
 reports/*.jsonl
+reports/*.json
 !reports/.gitkeep
 __pycache__/
 *.pyc

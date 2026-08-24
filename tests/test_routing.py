@@ -248,6 +248,87 @@ def test_retrieval_route_adds_no_index_block(
     assert len(docs) <= 3
 
 
+_NAMED_PAIR_CHUNKS = [
+    Document(
+        page_content=(
+            "CloudFront's origin failover misrouted traffic to a stale replica "
+            "bucket during a 26 minute window."
+        ),
+        metadata={
+            "chunk_id": "chunk-0801",
+            "doc_id": "doc-0801",
+            "incident_id": "INC-2025-0801",
+            "section": "Root Cause",
+            "severity": "high",
+            "services": "cloudfront",
+            "date": "2025-08-01T00:00:00+00:00",
+            "source": "synthetic",
+        },
+    ),
+    Document(
+        page_content=(
+            "ALB health checks flapped because GC pauses exceeded the "
+            "configured check timeout, deregistering healthy targets."
+        ),
+        metadata={
+            "chunk_id": "chunk-0802",
+            "doc_id": "doc-0802",
+            "incident_id": "INC-2025-0802",
+            "section": "Root Cause",
+            "severity": "high",
+            "services": "alb",
+            "date": "2025-08-02T00:00:00+00:00",
+            "source": "synthetic",
+        },
+    ),
+]
+
+
+def test_comparison_question_widens_docs_to_cover_both_named_incidents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # k=1 mathematically cannot return both chunks from plain retrieval - a
+    # live accuracy audit found exactly this shape (a question naming two
+    # incidents) getting only one, or neither, at k=5 on every strategy, and
+    # the model correctly refusing rather than compare from half the
+    # evidence. This proves the widening step fills the gap regardless of
+    # which of the two BM25 happens to rank first.
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", "routing_named_pair_test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(rag_chain_module, "_corpus_chunks", lambda: _NAMED_PAIR_CHUNKS)
+    build_index(_NAMED_PAIR_CHUNKS, reset=True)
+
+    question = "What distinguishes the two CloudFront-related incidents, INC-2025-0801 and INC-2025-0802?"
+    docs, index_block, route = retrieve_for_question(question, "keyword", k=1)
+
+    assert route == "retrieval"
+    assert index_block == ""
+    covered = {doc.metadata["incident_id"] for doc in docs}
+    assert covered == {"INC-2025-0801", "INC-2025-0802"}
+
+
+def test_single_named_incident_lookup_is_not_widened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only one id named - the ordinary case that already retrieves reliably
+    # (rag-06 through rag-15 style lookups in the same audit) must stay
+    # untouched, not silently pick up a second incident's chunks.
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", "routing_single_id_test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(rag_chain_module, "_corpus_chunks", lambda: _NAMED_PAIR_CHUNKS)
+    build_index(_NAMED_PAIR_CHUNKS, reset=True)
+
+    docs, index_block, route = retrieve_for_question("What was the root cause of INC-2025-0801?", "keyword", k=1)
+
+    # Whichever single chunk keyword search ranks first at k=1 is a retrieval-
+    # quality question outside this test's scope - what matters here is that
+    # naming exactly one id never grows k=1 into two incidents' worth of docs.
+    assert route == "retrieval"
+    assert len(docs) == 1
+
+
 def test_index_answers_the_cost_total_question() -> None:
     # Q10 of the adversarial set. The model still has to add the figures up,
     # but every figure it needs - and no figure it does not - must be in front

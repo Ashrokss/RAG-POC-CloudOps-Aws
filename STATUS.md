@@ -2,30 +2,34 @@
 
 **Branch:** `feature/rag-aws-sre` · **PR:** #1 · **Deployed:** http://rag-sre-poc-frontend.azurewebsites.net
 **Live config:** Azure `gpt-4o-mini` chat + `text-embedding-3-small` embeddings · 25 docs / 233 chunks
-**Tests:** 112 passing offline (was 38)
+**Tests:** 170 passing offline (was 38)
 
 ## "What's the accuracy?" — there is no single number, on purpose
 
 This system is scored on several axes that don't collapse into one percentage without hiding what
 each one actually means - this is why `eval run` reports golden/adversarial separately and
-question-type-by-question-type rather than one pooled score. The real, current, live-verified
-numbers (`reports/eval_comparison_live-adversarial-t7-grounding-fix.md`, 13 adversarial questions ×
-4 strategies):
+question-type-by-question-type rather than one pooled score.
+
+**The 88-question golden set has now been scored live for the first time** (previously only in
+mock mode - see T9), alongside the 13-question adversarial set, across all 4 strategies - 404
+pairs, `reports/eval_comparison_current-accuracy-2026-08-21.md`:
 
 | Dimension | Result |
 |---|---|
-| Refuses when it should (unanswerable trap questions) | **100%** (13/13, all 4 strategies) |
+| Refuses when it should (unanswerable trap questions) | **100%** (all 4 strategies) |
 | Never leaks a forbidden fact | **100%** (0 leaks anywhere in the adversarial set) |
 | Names every fact a question requires it to (`required_id_recall`) | **25%-100%**, strategy- and question-dependent - the widest-ranging, least single-number-able metric |
-| Hallucinated date/incident-id next to a real citation (`grounding_date` + `grounding_unretrieved_incident`) | Improved this session (see item 1 below) but **not zero** - averages ~0.2-0.8 violations per aggregate-type question depending on strategy |
+| Hallucinated date/incident-id next to a real citation (`grounding_date` + `grounding_unretrieved_incident`) | Improved in T7 but **not zero** - averages ~0.2-0.8 violations per aggregate-type question depending on strategy |
+| False-refusal rate on golden questions (never designed to be unanswerable) | Was **6.8%-9.1%**, concentrated at 36-55% on `cross_document` - root-caused and fixed in T9 |
+| Golden-set retrieval recall | **0.92-1.00** on 4 of 5 question types (`cross_document` was the outlier T9 fixes) |
 
-**The 88-question golden set (ordinary Q&A) has never been scored live** - only in mock mode, which
-the README already flags as producing artificially low scores since `MockChatModel` quotes text
-verbatim instead of paraphrasing. So there is currently no live "how often does it get a normal
-question right" percentage at all; only the 13-question adversarial set and 2 ad hoc blast_radius
-questions have been checked against the real model. A live golden-set run (`python -m cli.eval run
---sets golden`, ~350 chat calls across 4 strategies) would be the way to get one, at a
-proportionally larger cost.
+**A caveat that matters more than any single number in the raw report**: golden-set `quality_score`
+(0.05-0.36 in the raw tables) is Jaccard token overlap between the live model's full-sentence
+answer and a terse `expected_answer_summary` string - a live model paraphrases and cites rather
+than quoting that summary back verbatim, so this number sits low **by construction**, even for
+answers that are factually perfect (spot-checked directly against source text: verbose,
+correctly-cited answers routinely score under 0.20). Recall/precision/mrr and the false-refusal
+rate above are the trustworthy signals from this run, not the raw `quality_score` column - see T9.
 
 > **Every eval report produced before the k-cap fix is void.** `hybrid` was returning up to 2k
 > documents while every other strategy returned k, so it answered from double the context *and*
@@ -47,6 +51,7 @@ proportionally larger cost.
 | T7 | blast_radius routing-regex fix + a generate()-level grounding retry | The dependency-impact route now actually triggers on natural phrasings; hallucinated incident-id/date claims get one automatic self-correction pass instead of shipping uncaught |
 | — | Embedding-provenance guard | A mismatched index fails with one clear message instead of a Chroma dimension error per strategy |
 | T8 | `rca/` known_pattern routing (RCA Platform v2) | A recurring failure (2+ retrieved incidents sharing one `okf/failure-modes/` entry) is answered from the existing playbook with zero chat-model calls, instead of re-deriving the same analysis every time |
+| T9 | Live accuracy audit + 2 confirmed bug fixes + `rca/` eval tooling | First-ever live golden-set run surfaced a structural false-refusal gap on multi-incident questions (fixed) and a `known_pattern` id-priority bug (fixed); `rca/` now has its own live spot-check harness, which found the second bug |
 
 ### T1 — cap every strategy at k
 `EnsembleRetriever` fuses two k-wide rankings by RRF and truncates nothing, so `hybrid` returned
@@ -132,6 +137,8 @@ stub chat model (`tests/test_rag_chain.py`), not only live spot-checks.
 | `Which incident had the longest detection gap…` | Route **aggregate**, correctly identifies **INC-2025-0302** and its fix. All four strategies failed this at the bake-off |
 | `semantic` / `hybrid` / `hybrid_rerank` | Working after the index rebuild (see below) |
 | Health probe | HTTP 200, startup probe 42 s |
+| `rca/` known_pattern route, live click-through on RCA Platform v2 | Route **known_pattern**, blue info box, correct playbook citing `INC-2025-0201`/`INC-2025-0902`, real Azure model behind it |
+| `rca/` retrieval route, live click-through (`What was the root cause of INC-2025-0101?`) | Route **retrieval**, correctly cited answer, 2249ms |
 
 ---
 
@@ -176,9 +183,22 @@ with mock embeddings (256-dim) while the live app embeds queries with `text-embe
 the embedding model into the collection and fails with one clear message on mismatch. **Anyone
 redeploying must re-ingest with the same provider the app is configured for.**
 
-**3. Cold start after deploy is slow and can wedge.** After the second deploy the app served
-skeleton frames for 7+ minutes; `az webapp restart` fixed it immediately. F1 tier, shared CPU.
-Restart after each deploy and confirm the console renders before declaring it live.
+**3. Cold start after deploy is slow and can wedge - and F1 tier can wedge harder than a restart
+fixes.** After the second deploy the app served skeleton frames for 7+ minutes; `az webapp restart`
+fixed it immediately. F1 tier, shared CPU. Restart after each deploy and confirm the console
+renders before declaring it live.
+
+Separately, during this session's live verification, the site's own WebSocket endpoint
+(`/_stcore/stream`) started returning a bare `429` on every handshake attempt - from a browser and
+from a standalone `curl` with zero prior requests - blocking both pages identically (so not a T8
+regression). Diagnosed as platform-level, not app-level: Azure's own `Http4xx`/`Http2xx` metrics for
+the resource recorded nothing during the outage (the rejection never reached the resource's own
+telemetry), Azure Resource Health confirmed F1 tier doesn't expose health diagnostics at all
+("consider upgrading to a Basic, Standard, or Premium App Service plan"), and neither `az webapp
+restart` nor a full `stop`→`start` cleared it. Scaling `plan-rag-poc-frontend` to B1 (Basic) fixed
+it immediately (`101 Switching Protocols`); scaled back to F1 after testing. **If this recurs, the
+fix is a temporary B1 scale-up, not another restart** - this is a known F1-tier limitation, not
+something a code change addresses.
 
 **4. ~~Refusal behaviour is unverified.~~ Verified live** (`reports/eval_comparison_live-adversarial-t6.md`,
 reconfirmed unchanged in `-t7-grounding-fix.md`): `refusal_correct = 1.000` on both "unanswerable"
@@ -247,8 +267,73 @@ a regression test that a novel question still calls the chat model normally. Ful
 52/52 passing. Verified locally in mock mode (`python -m rca.cli ask "..."`, `HashEmbedder` +
 `EchoChatModel`): a symptom description naming no incident id correctly returns `route=known_pattern`
 in 90ms citing the real matched incidents (`INC-2025-0201`, `INC-2025-0902`), with the other three
-routes unaffected. **Not yet verified against the live Azure-deployed instance** - that needs a
-redeploy first, which this pass deliberately did not do.
+routes unaffected. **Verified live** against the deployed Azure instance after a redeploy - see
+"Verified live on the deployed app" above; the App Service also needed a temporary F1→B1 scale-up
+to unblock testing (see item 3 below).
+
+### T9 — Live accuracy audit, two confirmed bug fixes, `rca/` eval tooling
+The first live scoring of the full 88-question golden set (never done before - see the top of this
+file), run alongside the 13-question adversarial set across all 4 strategies (404 pairs,
+`reports/eval_comparison_current-accuracy-2026-08-21.md/.csv/.jsonl`), plus a new 15-question live
+spot-check for `rca/` (`data/rca_qa/spotcheck.yaml`, `rca/eval.py`, `python -m rca.cli eval`) built
+from scratch since that pipeline had no eval harness at all. Found two real bugs, fixed both, and
+one methodology trap in the golden set's own scoring:
+
+**Methodology trap**: golden-set `quality_score` (heuristic Jaccard judge) sits at 0.05-0.36 across
+the board - not because the answers are bad, but because a live model paraphrases and cites rather
+than quoting the terse `expected_answer_summary` string back verbatim. Spot-checked directly: a
+detailed, correctly-cited answer citing exact IOPS figures and a real remediation command scored
+0.197. Recall/precision/mrr and refusal rate are what this run actually trusts; see the top of this
+file.
+
+**Bug 1 (`rag/`) - a structural false-refusal gap on multi-incident questions.** 6.8-9.1% of golden
+questions got refused outright ("insufficient evidence"), concentrated in `cross_document` at
+36-55% and identical across all four strategies - traced directly to source: plain top-k retrieval
+has no guarantee of covering every incident a question names explicitly, so a two-incident
+comparison question routinely got only one (or neither) incident's chunks, and the model correctly
+refused rather than guess. Confirmed mechanism on the CloudFront question
+(`INC-2025-0801`/`INC-2025-0802`): every strategy retrieved at most one of the two named incidents
+(recall 0.0 or 0.5) before the fix.
+
+Fixed in `rag/chain/rag_chain.py::_widen_for_named_incidents()`: when a question names 2+ incident
+ids, any named id missing from what was retrieved gets its own top-ranked chunks pulled in
+directly - the same per-incident lookup `aggregate_context()` already uses, just triggered by a
+named id instead of a service filter, and only on the `retrieval` route. Deliberately **not** a
+repeat of the "route 'between X and Y' through aggregate" idea `rag/routing/router.py` already
+tried and reverted (that filtered by service, not by named id, and solved nothing for this shape).
+Re-verified live afterward: all 4 strategies now retrieve both named incidents and produce a real
+comparative, cited answer instead of refusing. Unit-tested in `tests/test_routing.py`
+(`test_comparison_question_widens_docs_to_cover_both_named_incidents`,
+`test_single_named_incident_lookup_is_not_widened`).
+
+**Bug 2 (`rca/`) - `known_pattern` overrides an explicitly-named, successfully-retrieved incident.**
+Asking for a specific existing incident by id (`INC-2026-0142`) returned an unrelated curated
+playbook for two *other* incidents (`INC-2025-0301`, `INC-2025-1002`) that happened to also come
+back in the same top-k and agree on a failure mode - even though `INC-2026-0142`'s own chunk was
+retrieved too. `match_known_pattern` had no check for whether the question named a specific
+incident that was itself retrieved.
+
+Fixed in `rca/answer.py::ask()`: before checking for a known_pattern match, check whether the
+question names an incident id (reusing `rca.gaps.INCIDENT_RE`) that is among the retrieved
+incidents; if so, skip the short-circuit entirely. `rca/failure_pattern.py::match_known_pattern`
+keeps its pure, question-unaware signature and its existing tests are unaffected. Unit-tested in
+`tests_v2/test_platform.py::test_a_named_incident_outranks_a_coincidental_pattern_match`, reusing
+the exact fixture that proves the opposite (question-less) case still fires correctly. Re-verified
+live: `python -m rca.cli ask "Give me the summary of INC-2026-0142."` now returns `route=retrieval`
+with the correct content. Full post-fix spot-check: 13/15 route match (up from 12/15), the bug's
+own case at 1.00 must-mention recall (`reports/rca_spotcheck_current-accuracy-2026-08-21-postfix.md`).
+The remaining 2/15 route misses (`rca-01`, `rca-03`) are a pre-existing phrasing-sensitivity nuance,
+not bugs - the answers given are still factually correct for the single incident each one found.
+
+**Footgun found and fixed**: `rca/providers.py` read `AZURE_AI_*` via bare `os.getenv()` with no
+`load_dotenv()` of its own - confirmed live, standalone `python -m rca.cli ask/ingest/...` (exactly
+what this project's own docs tell you to run) silently fell back to the mock embedder/chat model
+with zero warning whenever nothing else had already imported `config.settings` first in the same
+process. Fixed by adding `load_dotenv(override=False)` at module level, mirroring
+`config/settings.py`'s own pattern - `rca/` is now correctly self-sufficient instead of accidentally
+import-order-dependent.
+
+Full test suite: 170/170 passing, including 3 new tests this session covering both fixes.
 
 ---
 
@@ -267,6 +352,7 @@ python -m cli.ingest run --reset                 # re-index (must match the app'
 python -m cli.eval run                           # both question sets, reported separately
 python -m cli.eval run --sets adversarial --k 10 # retrieval-depth check
 python -m cli.query ask "<question>" --strategy hybrid
+python -m rca.cli eval                           # rca/'s own 15-question live spot-check (T9)
 streamlit run streamlit_app.py
 ```
 

@@ -219,6 +219,45 @@ def test_a_novel_question_still_calls_the_chat_model(store: Store, retriever: Re
     assert calls == [1]
 
 
+def test_a_named_incident_outranks_a_coincidental_pattern_match(
+    store: Store, retriever: Retriever, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The exact real bug a live accuracy audit found: "give me the summary of
+    # INC-2026-0142" retrieved one genuine chunk from that incident plus
+    # chunks from two other, unrelated incidents that happened to agree on a
+    # failure mode - and known_pattern fired on the coincidence, silently
+    # discarding the correct answer that was sitting right there. Same
+    # matched_chunks fixture as test_a_recurring_pattern_skips_generation_
+    # entirely, which proves this route DOES fire without a named id - the
+    # only variable here is the question naming one of the two chunks.
+    matched_chunks = [
+        Chunk(chunk_id="c1", doc_id="d1", section="Root Cause", ordinal=0, text="x",
+              incident_id="INC-2025-0201"),
+        Chunk(chunk_id="c2", doc_id="d2", section="Root Cause", ordinal=0, text="y",
+              incident_id="INC-2025-0902"),
+    ]
+    monkeypatch.setattr(
+        retriever,
+        "hybrid",
+        lambda question, k: RetrievalResult(
+            hits=[Retrieved(chunk=c, score=0.9) for c in matched_chunks], coverage=0.9
+        ),
+    )
+    calls: list[int] = []
+
+    class Counting:
+        model_id = "stub:counting"
+
+        def complete(self, system: str, user: str) -> str:
+            calls.append(1)
+            return "insufficient evidence in the retrieved context"
+
+    answer = ask(store, retriever, Counting(), "What was the root cause of INC-2025-0201?")
+
+    assert answer.route != "known_pattern"
+    assert calls == [1]
+
+
 # ---------- gaps ----------
 
 
